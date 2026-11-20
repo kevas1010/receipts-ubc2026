@@ -257,6 +257,9 @@ class SettledPool:
     def games(self):
         return self._g
 
+    def all_markets(self):
+        return self._g
+
 
 def settled_game(start, winner=0):
     e = ev("NBA-X-M", "Arizona", "UConn", start, status="settled",
@@ -297,7 +300,20 @@ def test_verified_analyst_is_no_longer_scraped(conn):
     assert conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == 0
 
 
-def test_verified_new_post_is_tracked_live(conn):
+def test_verified_analyst_is_not_scraped_by_default(conn):
+    """Verified analysts post through PickProof (hash-committed); the consumer scraper leaves them alone."""
+    service.ensure_capper("discord:555", "Capper Carl", conn=conn)
+    conn.execute("UPDATE cappers SET verified_at=? WHERE id='discord:555'", (service.iso(NOW - timedelta(days=1)),))
+    conn.commit()
+    gem = FakeGemini([ev("NBA-Y-M", "Arizona", "UConn", NOW + timedelta(hours=3))])
+    res = observe.ingest([msg(discord_id_for(NOW - timedelta(minutes=5)), "Arizona ML 1u")], gem,
+                         SettledPool(gem.moneylines()), conn=conn, now=NOW)
+    assert res[0]["outcome"] == "verified_source"
+    assert conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == 0
+
+
+def test_verified_new_post_is_tracked_live(conn, monkeypatch):
+    monkeypatch.setattr(observe.settings, "scrape_verified", True)
     service.ensure_capper("discord:555", "Capper Carl", conn=conn)
     conn.execute("UPDATE cappers SET verified_at=? WHERE id='discord:555'", (service.iso(NOW - timedelta(days=1)),))
     conn.commit()
@@ -342,7 +358,7 @@ def test_calldata_encoding():
 
 def test_badge_svg_shows_win_rate_and_escapes():
     svg = badge_svg("<Dan>", {"tier": "verified", "wins": 9, "losses": 3, "win_rate": 0.75, "units": 3.1})
-    assert "&lt;Dan&gt;" in svg and "Receipts Verified" in svg and "75%" in svg
+    assert "&lt;Dan&gt;" in svg and "PickProof Verified" in svg and "75%" in svg
 
 
 def test_quote_implied():
@@ -392,11 +408,12 @@ def test_slip_image_becomes_graded_pick(conn):
     assert again[0]["outcome"] == "seen" and conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == 1
 
 
-def test_parlay_slip_rejected(conn):
+def test_parlay_slip_legs_are_matched_one_by_one(conn):
+    """A parlay is split into its legs; each needs its own Gemini market (none here)."""
     m = msg(discord_id_for(NOW - timedelta(hours=1)), "lock it in", images=["https://cdn.discordapp.com/a/b/c.png"])
     res = observe.ingest([m], FakeGemini([]), SettledPool([]), conn=conn, now=NOW,
                          read_image=lambda url: "3 Leg Parlay\nArizona\nMoneyline")
-    assert res[0]["outcome"] == "rejected"
+    assert res[0]["outcome"] == "no_game" and "Arizona ML" in res[0]["reason"]
 
 
 @pytest.mark.skipif(not ocr.available(), reason="Tesseract not installed")

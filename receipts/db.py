@@ -77,6 +77,8 @@ MIGRATIONS = {
         "storefront_url": "TEXT",
         "first_seen": "TEXT",
         "last_seen": "TEXT",
+        "demo_staged": "INTEGER NOT NULL DEFAULT 0",  # imported but hidden until someone presses Load (demo)
+        "credential": "TEXT",                          # PickProof credential hash, issued at verification
     },
     "picks": {
         "mode": "TEXT NOT NULL DEFAULT 'live'",   # live = locked/tracked; scraped = graded from past posts
@@ -84,6 +86,9 @@ MIGRATIONS = {
         "observed_at": "TEXT",
         "edited_flag": "INTEGER NOT NULL DEFAULT 0",
         "note": "TEXT",
+        "position": "TEXT NOT NULL DEFAULT 'yes'",          # yes | no on the Gemini contract
+        "market_type": "TEXT NOT NULL DEFAULT 'moneyline'",  # moneyline | spread | total | prop
+        "bet_text": "TEXT",                                   # the bet as the analyst made it ("Bucks +9.5")
     },
 }
 

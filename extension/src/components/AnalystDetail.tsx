@@ -12,7 +12,7 @@ import {List, ListItem} from '@astryxdesign/core/List';
 import {MetadataList, MetadataListItem} from '@astryxdesign/core/MetadataList';
 import {Spinner} from '@astryxdesign/core/Spinner';
 
-import {api, clvPts, pct, record, shortHash, units, when, type Pick, type Profile} from '../api';
+import {api, betLabel, clvPts, geminiSide, pct, record, shortHash, units, when, type Pick, type Profile} from '../api';
 import {IntegrityBadge, ResultText, Sparkline, TierBadge} from './bits';
 
 function PickRow({pick}: {pick: Pick}) {
@@ -22,13 +22,13 @@ function PickRow({pick}: {pick: Pick}) {
       align="start"
       label={
         <HStack gap={2} vAlign="center" wrap="wrap">
-          <Text weight="semibold">{`${pick.side_label} ML · ${pick.units}u`}</Text>
+          <Text weight="semibold">{`${betLabel(pick)} · ${+pick.units.toFixed(2)}u`}</Text>
           <IntegrityBadge pick={pick} />
         </HStack>
       }
       description={
         <VStack gap={1}>
-          <Text type="supporting" maxLines={1}>{pick.event_title}</Text>
+          <Text type="supporting" maxLines={1}>{`${pick.event_title} · Gemini ${geminiSide(pick)}`}</Text>
           <Text type="supporting">
             {`Posted ${when(pick.posted_at)} · Gemini ${pct(pick.lock_price)} → close ${pct(pick.close_price)} (${clvPts(pick.clv)})`}
           </Text>
@@ -121,7 +121,7 @@ export default function AnalystDetail({handle, onBack, badgeSrc}: {handle: strin
 
       {verified ? (
         <Text type="supporting">
-          {`Verified ${rec.verified_at ? when(rec.verified_at) : ''}. Receipts stopped scraping this analyst then; this record is every pick they've posted since, graded on Gemini Predictions.`}
+          {`Verified ${rec.verified_at ? when(rec.verified_at) : ''}. PickProof stopped scraping this analyst then; this record is every pick they've posted since, graded on Gemini Predictions.`}
         </Text>
       ) : (
         <Banner
@@ -131,7 +131,7 @@ export default function AnalystDetail({handle, onBack, badgeSrc}: {handle: strin
         />
       )}
 
-      {badgeSrc && verified && <img src={badgeSrc} alt={`${capper.display_name} Receipts badge`} height={56} />}
+      {badgeSrc && verified && <img src={badgeSrc} alt={`${capper.display_name} PickProof badge`} height={56} />}
 
       {capper.storefront_url && (
         <Link href={capper.storefront_url} isExternalLink isStandalone>

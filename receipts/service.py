@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from . import chain, db
+from . import chain, db, markets, slips
 from .config import settings
 from .gemini import Game, GeminiClient, Side, parse_ts
 from .parse import ParsedPick, Rejection, parse_pick
@@ -71,11 +71,13 @@ def lock_pick(*, capper_id: str, source: str, post_id: str, text: str, posted_at
         return LockResult(True, "Already locked.", dict(existing))
 
     parsed = parse_pick(text)
-    if parsed is None:
-        return LockResult(False, "")
-    if isinstance(parsed, Rejection):
-        return LockResult(False, parsed.reason)
-    assert isinstance(parsed, ParsedPick)
+    if not isinstance(parsed, ParsedPick):
+        # Not a moneyline: maybe a spread, total or player prop that Gemini lists ("Pistons -5.5 2u").
+        leg = slips.parse_typed(text)
+        if leg is None:
+            return LockResult(False, parsed.reason if isinstance(parsed, Rejection) else "")
+        return _lock_leg(leg, capper_id=capper_id, source=source, post_id=str(post_id), text=text, posted_at=posted_at,
+                         gemini=gemini, channel_id=channel_id, guild_id=guild_id, games=games, conn=conn, anchor=anchor)
 
     # Match against every Gemini moneyline, including started ones, so we can say *why* we refuse.
     pool = games if games is not None else gemini.moneylines()
@@ -107,6 +109,41 @@ def lock_pick(*, capper_id: str, source: str, post_id: str, text: str, posted_at
             (capper_id, source, str(post_id), channel_id, guild_id, text, parsed.team, parsed.units,
              game.ticker, game.title, game.slug, game.league, side.label, side.abbreviation, side.instrument_symbol,
              iso(game.start_time), iso(posted_at), iso(now()), lock_price, h))
+        pick_id = cur.lastrowid
+    if anchor:
+        tx_hash = chain.anchor(h, f"{source}:{post_id}")
+        if tx_hash:
+            with db.tx(conn):
+                conn.execute("UPDATE picks SET tx_hash=? WHERE id=?", (tx_hash, pick_id))
+    pick = dict(conn.execute("SELECT * FROM picks WHERE id=?", (pick_id,)).fetchone())
+    return LockResult(True, "Locked", pick, game=game, side=side)
+
+
+def _lock_leg(leg: slips.Leg, *, capper_id: str, source: str, post_id: str, text: str, posted_at: datetime,
+              gemini: GeminiClient, channel_id: str | None, guild_id: str | None, games: list[Game] | None,
+              conn: sqlite3.Connection, anchor: bool) -> LockResult:
+    units = slips.message_meta(text)[0] or 1.0
+    if units <= 0 or units > settings.max_units:
+        return LockResult(False, f"Stake must be between 0 and {settings.max_units:g} units.")
+    pool = games if games is not None else gemini.markets()
+    m = markets.match_leg(leg, posted_at, pool)
+    if isinstance(m, markets.NoMatch):
+        return LockResult(False, f"{leg.describe()}: {m.reason}")
+    game, side, position = m.game, m.side, m.position
+    lock_price = markets.position_price(game, side, position)
+    payload = chain.commit_payload(capper_id=capper_id, source=source, post_id=post_id, text=text,
+                                   event_ticker=game.ticker, side_label=f"{position.upper()}: {side.label}", units=units,
+                                   lock_price=lock_price, posted_at=iso(posted_at))
+    h = chain.commit_hash(payload)
+    with db.tx(conn):
+        cur = conn.execute(
+            """INSERT INTO picks(capper_id, source, post_id, channel_id, guild_id, text, team_query, units,
+               event_ticker, event_title, event_slug, league, side_label, side_abbr, instrument_symbol, start_time,
+               posted_at, locked_at, lock_price, commit_hash, position, market_type, bet_text)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (capper_id, source, post_id, channel_id, guild_id, text, leg.describe(), units, game.ticker, game.title,
+             game.slug, game.league, side.label, side.abbreviation, side.instrument_symbol, iso(game.start_time),
+             iso(posted_at), iso(now()), lock_price, h, position, leg.kind, leg.describe()))
         pick_id = cur.lastrowid
     if anchor:
         tx_hash = chain.anchor(h, f"{source}:{post_id}")
@@ -159,13 +196,17 @@ def snapshot_closes(gemini: GeminiClient, conn=None, at: datetime | None = None)
         if at < start - timedelta(minutes=settings.close_snapshot_minutes):
             continue
         price = None
+        position = (r["position"] if "position" in r.keys() else None) or "yes"
         try:
             if at < start:
                 g = gemini.event(r["event_ticker"])
                 s = g.side(r["side_label"])
-                price = s.price if s else None
+                if s:
+                    from .markets import position_price
+                    price = position_price(g, s, position)
             if price is None:
-                price = gemini.price_at(r["instrument_symbol"], start - timedelta(minutes=settings.close_snapshot_minutes))
+                yes = gemini.price_at(r["instrument_symbol"], start - timedelta(minutes=settings.close_snapshot_minutes))
+                price = yes if yes is None or position == "yes" else round(1 - yes, 4)
         except Exception as e:
             log.info("close snapshot failed for %s: %s", r["event_ticker"], e)
         if price is not None:
@@ -194,8 +235,9 @@ def grade_pending(gemini: GeminiClient, conn=None, at: datetime | None = None) -
             continue
         side = g.side(r["side_label"])
         result = None
+        position = (r["position"] if "position" in r.keys() else None) or "yes"
         if g.status == "settled" and side and side.resolution in ("yes", "no"):
-            result = "win" if side.resolution == "yes" else "loss"
+            result = "win" if side.resolution == position else "loss"
         elif at - start > timedelta(days=settings.void_after_days):
             result = "void"
         if result:

@@ -32,7 +32,7 @@ export default function App() {
   const clearFocus = useCallback(() => setFocus(null), []);
 
   if (!session) {
-    return <Spinner label="Starting Receipts" />;
+    return <Spinner label="Starting PickProof" />;
   }
 
   const signedIn = !!session.token && !!session.role;
@@ -45,7 +45,7 @@ export default function App() {
             <HStack gap={2} vAlign="center">
               <StackItem size="fill">
                 <VStack gap={0.5}>
-                  <Heading level={2}>Receipts</Heading>
+                  <Heading level={2}>PickProof</Heading>
                   <Text type="supporting">
                     {signedIn ? `${session.name} · ${session.role === 'tailer' ? 'Tailer' : 'Analyst'}` : 'Graded on Gemini Predictions'}
                   </Text>

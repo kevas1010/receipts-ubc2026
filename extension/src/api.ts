@@ -43,6 +43,7 @@ export interface Capper {
   demo: number;
   verified_at: string | null;
   storefront_url: string | null;
+  credential: string | null;
   first_seen: string | null;
   last_seen: string | null;
 }
@@ -77,6 +78,9 @@ export interface Pick extends Record<string, unknown> {
   channel_name: string | null;
   edited_flag: number;
   note: string | null;
+  position: 'yes' | 'no';
+  market_type: 'moneyline' | 'spread' | 'total' | 'prop';
+  bet_text: string;
   profit: number;
   clv: number | null;
   venues: VenueQuote[];
@@ -187,6 +191,10 @@ export const api = {
   profile: (handle: string) => request<Profile>(`/api/analysts/${encodeURIComponent(handle)}`),
   candles: (id: number) => request<{candles: {t: number; close: number}[]}>(`/api/picks/${id}/candles`),
   config: () => request<{window_days: number; demo_mode: boolean}>('/api/config'),
+  demoVerify: () => request<{ok: boolean; credential: string}>('/api/analyst/demo-verify', {method: 'POST', body: {}}),
+  simMarkets: (kind?: string) => request<SimMarket[]>(`/api/simulator/markets${kind ? `?kind=${kind}` : ''}`),
+  simPick: (ticker: string, label: string, position: 'yes' | 'no', units: number) =>
+    request<SimResult>('/api/simulator/pick', {method: 'POST', body: {ticker, label, position, units}}),
 };
 
 export async function badgeUrl(handle: string) {
@@ -212,6 +220,58 @@ export async function scanDiscord(): Promise<ScanResult | null> {
     return (await chrome.tabs.sendMessage(tab.id, {type: 'SCAN'})) as ScanResult;
   } catch {
     return null; // content script not loaded yet (tab opened before install): a reload fixes it
+  }
+}
+
+export interface SimMarket {
+  ticker: string;
+  title: string;
+  league: string;
+  type: 'moneyline' | 'spread' | 'total' | 'prop';
+  start_time: string;
+  gemini_url: string;
+  contracts: {label: string; resolution: string | null}[];
+}
+
+export interface SimResult {
+  title: string;
+  contract: string;
+  position: 'yes' | 'no';
+  price: number | null;
+  result: 'win' | 'loss' | 'pending';
+  profit: number | null;
+  hash: string;
+  note: string;
+}
+
+/** The bet as the analyst made it, and the Gemini contract side that grades it. */
+export function betLabel(pick: Pick): string {
+  return pick.bet_text || `${pick.side_label} ML`;
+}
+export function geminiSide(pick: Pick): string {
+  return pick.market_type === 'moneyline' && pick.position !== 'no'
+    ? `YES · ${pick.side_label}`
+    : `${(pick.position || 'yes').toUpperCase()} · ${pick.side_label}`;
+}
+
+export interface HistoryProgress {
+  running: boolean;
+  messages: number;
+  oldest: string | null;
+  done?: boolean;
+  error?: string;
+}
+
+/** Ask the content script to scroll the open channel back `days` days, so every post gets read and graded. */
+export async function loadHistory(days: number): Promise<HistoryProgress | null> {
+  const tab = await discordTab();
+  if (!tab?.id) {
+    return null;
+  }
+  try {
+    return (await chrome.tabs.sendMessage(tab.id, {type: 'LOAD_HISTORY', days})) as HistoryProgress;
+  } catch {
+    return null;
   }
 }
 

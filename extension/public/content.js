@@ -1,7 +1,7 @@
-// Receipts content script for discord.com.
+// PickProof content script for discord.com.
 //
 // Reads only the messages Discord has already rendered for the signed-in user (no Discord API calls, no
-// tokens, no auto-scrolling), sends them to Receipts for Gemini grading, and puts a small record badge
+// tokens; it only scrolls when you press "Load 30 days"), sends them to PickProof for Gemini grading, and puts a small record badge
 // next to each analyst's name. The DOM shape lives in one place, readMessages(), so it is easy to adjust.
 (() => {
   if (window.__receiptsLoaded) {
@@ -114,7 +114,25 @@
     });
   }
 
+  let inFlight = null;
+  let again = false;
+  // One scan at a time: slip OCR on the server can take a few seconds, and Discord mutates constantly.
   async function scan(force) {
+    if (inFlight) {
+      again = true;
+      return inFlight;
+    }
+    inFlight = scanOnce(force).finally(() => {
+      inFlight = null;
+      if (again) {
+        again = false;
+        schedule();
+      }
+    });
+    return inFlight;
+  }
+
+  async function scanOnce(force) {
     const msgs = readMessages();
     const key = m => m.text + '|' + m.images.length;
     const fresh = msgs.filter(m => force || SENT.get(m.message_id) !== key(m));
@@ -173,8 +191,8 @@
         el.dataset.tier = data.tier;
         el.textContent = label;
         el.title = verified
-          ? 'Receipts Verified: every pick since verification, graded on Gemini Predictions. Click for details.'
-          : 'Receipts: graded from posts tailers have seen. May be incomplete. Click for details.';
+          ? 'PickProof Verified: every pick since verification, graded on Gemini Predictions. Click for details.'
+          : 'PickProof: graded from posts tailers have seen. May be incomplete. Click for details.';
       }
     });
   }
@@ -189,7 +207,61 @@
   setInterval(() => BADGES.clear(), 60_000); // refresh records once a minute
   schedule();
 
+  // ---- history: user-requested scroll back through the open channel ------------------------
+  function scroller() {
+    let el = document.querySelector('ol[data-list-id="chat-messages"]');
+    while (el && !(el.scrollHeight > el.clientHeight + 10 && /auto|scroll/.test(getComputedStyle(el).overflowY))) {
+      el = el.parentElement;
+    }
+    return el;
+  }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  async function loadHistory(days) {
+    const sc = scroller();
+    if (!sc) {
+      return {running: false, messages: 0, oldest: null, error: 'Open a text channel first.'};
+    }
+    const cutoff = Date.now() - days * 864e5;
+    const seen = new Set();
+    let oldest = null;
+    let stall = 0;
+    for (let i = 0; i < 300; i++) {
+      const before = seen.size;
+      readMessages().forEach(m => {
+        seen.add(m.message_id);
+        const t = Number((BigInt(m.message_id) >> 22n) + 1420070400000n); // snowflake time
+        if (!oldest || t < oldest) {
+          oldest = t;
+        }
+      });
+      await scan(false); // grade what's on screen before moving on
+      if (/This is the start of the/.test(sc.innerText.slice(0, 4000)) || (oldest && oldest < cutoff)) {
+        break;
+      }
+      stall = seen.size === before ? stall + 1 : 0;
+      if (stall > 8) {
+        break;
+      }
+      sc.scrollTop = 0;
+      sc.dispatchEvent(new Event('scroll', {bubbles: true}));
+      await sleep(1200 + Math.random() * 600); // Discord loads ~50 messages per page
+    }
+    // walk back down so messages Discord unloaded on the way up are read too
+    for (let i = 0; i < 200 && sc.scrollTop + sc.clientHeight < sc.scrollHeight - 5; i++) {
+      sc.scrollTop += Math.round(sc.clientHeight * 0.8);
+      await sleep(350);
+      readMessages().forEach(m => seen.add(m.message_id));
+      await scan(false);
+    }
+    return {running: false, done: true, messages: seen.size, oldest: oldest ? new Date(oldest).toISOString() : null};
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+    if (msg.type === 'LOAD_HISTORY') {
+      loadHistory(msg.days || 30).then(reply, e => reply({running: false, messages: 0, oldest: null, error: String(e)}));
+      return true;
+    }
     if (msg.type === 'SCAN') {
       scan(true).then(reply);
       return true;

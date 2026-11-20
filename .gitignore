@@ -7,3 +7,6 @@ extension/node_modules/
 .pytest_cache/
 seed.log
 vite.log
+demo*.db*
+exports/
+pickproof-export-*.json

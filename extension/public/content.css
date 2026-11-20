@@ -1,4 +1,4 @@
-/* Receipts record badge next to analyst names in Discord. Scoped by class so it can't leak into Discord. */
+/* PickProof record badge next to analyst names in Discord. Scoped by class so it can't leak into Discord. */
 .rcpt-badge {
   all: unset;
   display: inline-flex;

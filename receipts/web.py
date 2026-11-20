@@ -1,23 +1,25 @@
-"""API for the Receipts Chrome extension, plus the shareable SVG badge.  Run with:  uvicorn receipts.web:app
+"""API for the PickProof Chrome extension, plus the shareable SVG badge.  Run with:  uvicorn receipts.web:app
 
 There is no standalone site: every screen lives in the extension's side panel.
 """
 from __future__ import annotations
 
+import json
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from . import slips, markets as market_match
 from . import analysts, chain, db, observe, odds, service, verify
 from .config import settings
 from .gemini import GeminiClient
 from .parse import ParsedPick, Rejection, parse_pick
 
-app = FastAPI(title="Receipts API")
+app = FastAPI(title="PickProof API")
 # The extension calls from a chrome-extension:// origin; tokens, not cookies, carry identity.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
 gemini = GeminiClient()
@@ -29,7 +31,7 @@ def current_user(authorization: str | None = Header(default=None)) -> dict:
     token = (authorization or "").removeprefix("Bearer ").strip()
     user = analysts.user_by_token(token)
     if not user:
-        raise HTTPException(401, "Sign in from the Receipts extension")
+        raise HTTPException(401, "Sign in from the PickProof extension")
     return user
 
 
@@ -78,6 +80,62 @@ def claim(body: ClaimIn, user: dict = Depends(analyst_user)):
     return {"code": code, "instructions": f"Post {code} as a message in any Discord channel while the extension is on."}
 
 
+@app.post("/api/analyst/demo-verify")
+def demo_verify(user: dict = Depends(analyst_user)):
+    """DEMO_MODE only: verify the signed-in analyst without a Discord claim post, so the flow can be shown live.
+    The analyst is labelled demo everywhere."""
+    if not settings.demo_mode:
+        raise HTTPException(403, "Instant verification is only available in demo mode. Post your claim code in Discord.")
+    conn = db.connect()
+    capper_id = user.get("capper_id") or f"pickproof:{user['id']}"
+    service.ensure_capper(capper_id, user["name"], demo=True, conn=conn)
+    with db.tx(conn):
+        conn.execute("UPDATE users SET capper_id=?, claim_code=NULL WHERE id=?", (capper_id, user["id"]))
+        conn.execute("UPDATE cappers SET verified_at=COALESCE(verified_at, ?) WHERE id=?", (service.iso(datetime.now(timezone.utc)), capper_id))
+    credential = analysts.issue_credential(capper_id, conn)
+    return {"ok": True, "capper_id": capper_id, "credential": credential}
+
+
+# ---- analyst market simulator (last week's settled Gemini markets; nothing is stored) ----------------
+@app.get("/api/simulator/markets")
+def simulator_markets(kind: str | None = None):
+    now = datetime.now(timezone.utc)
+    games = [g for g in gemini.settled_markets(max_pages=10)
+             if g.start_time and now - timedelta(days=8) <= g.start_time <= now and g.scope == "full_contest"
+             and g.market_type in ("moneyline", "spread", "total", "prop") and (not kind or g.market_type == kind)]
+    games.sort(key=lambda g: g.start_time, reverse=True)
+    return [{"ticker": g.ticker, "title": g.title, "league": g.league, "type": g.market_type, "metric": g.metric,
+             "start_time": g.start_time.isoformat(), "gemini_url": g.market_url,
+             "contracts": [{"label": s.label, "resolution": s.resolution} for s in g.sides[:12]]}
+            for g in games[:80]]
+
+
+class SimIn(BaseModel):
+    ticker: str
+    label: str
+    position: str = Field(pattern="^(yes|no)$")
+    units: float = Field(gt=0, le=10)
+
+
+@app.post("/api/simulator/pick")
+def simulator_pick(body: SimIn, user: dict = Depends(analyst_user)):
+    g = gemini.event(body.ticker)
+    side = g.side(body.label)
+    if not side:
+        raise HTTPException(404, "No such contract")
+    yes = gemini.price_at(side.instrument_symbol, g.start_time - timedelta(minutes=60))
+    price = yes if yes is None or body.position == "yes" else round(1 - yes, 4)
+    result = ("win" if side.resolution == body.position else "loss") if side.resolution in ("yes", "no") else "pending"
+    payload = {"simulation": True, "analyst": user["name"], "ticker": g.ticker, "contract": side.label,
+               "position": body.position, "units": body.units, "price": price}
+    from eth_utils import keccak
+    h = "0x" + keccak(text=json.dumps(payload, sort_keys=True)).hex()
+    return {"title": g.title, "contract": side.label, "position": body.position, "price": price, "result": result,
+            "profit": round(verify.profit(result, body.units, price), 2) if price else None, "hash": h,
+            "start_time": g.start_time.isoformat(), "gemini_url": g.market_url,
+            "note": "Simulation on a settled Gemini market, priced one hour before start. Not added to your record."}
+
+
 class StorefrontIn(BaseModel):
     url: str = Field(max_length=300)
 
@@ -109,9 +167,9 @@ def post_pick(body: PickIn, user: dict = Depends(analyst_user)):
                 "choices": [{"ticker": g.ticker, "title": g.title, "side": s.label,
                              "start_time": g.start_time.isoformat()} for g, s in res.choices[:5]]}
     if not res.ok:
-        return {"ok": False, "message": res.message or "Not a straight moneyline."}
+        return {"ok": False, "message": res.message or "Not a pick Gemini lists (moneyline, spread, total or player prop)."}
     pick = res.pick
-    if res.game and res.side:
+    if res.game and res.side and (pick.get("market_type") or "moneyline") == "moneyline":  # venue compare is moneyline-only
         quotes = odds.compare(res.game, res.side)
         service.save_venues(pick["id"], odds.to_json(quotes))
         pick = dict(db.connect().execute("SELECT * FROM picks WHERE id=?", (pick["id"],)).fetchone())
@@ -143,17 +201,23 @@ def analysts_list(guild_id: str | None = None, channel_id: str | None = None):
     conn = db.connect()
     if guild_id or channel_id:
         col, val = ("channel_id", channel_id) if channel_id else ("guild_id", guild_id)
-        ids = [r[0] for r in conn.execute(f"SELECT DISTINCT capper_id FROM picks WHERE {col}=?", (val,))]
+        ids = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT p.capper_id FROM picks p JOIN cappers c ON c.id=p.capper_id WHERE p.{col}=? AND c.demo_staged=0", (val,))]
         return verify.leaderboard(conn, capper_ids=ids)
-    return verify.leaderboard(conn)
+    ids = [r[0] for r in conn.execute("SELECT id FROM cappers WHERE demo_staged=0")]
+    return verify.leaderboard(conn, capper_ids=ids)
 
 
 # ---- shared read endpoints -----------------------------------------------
 def pick_out(p: dict, events: list[dict]) -> dict:
     keys = ("id", "source", "post_id", "text", "units", "event_ticker", "event_title", "event_slug", "league",
             "side_label", "side_abbr", "instrument_symbol", "start_time", "posted_at", "locked_at", "lock_price",
-            "close_price", "result", "commit_hash", "tx_hash", "status", "mode", "channel_name", "edited_flag", "note")
+            "close_price", "result", "commit_hash", "tx_hash", "status", "mode", "channel_name", "edited_flag", "note",
+            "position", "market_type", "bet_text")
     out = {k: p.get(k) for k in keys}
+    out["position"] = out.get("position") or "yes"
+    out["market_type"] = out.get("market_type") or "moneyline"
+    out["bet_text"] = out.get("bet_text") or (f"{p.get('side_label')} ML" if out["market_type"] == "moneyline" else p.get("team_query"))
     out["profit"] = round(verify.profit(p["result"], p["units"], p["lock_price"]), 2)
     out["clv"] = round(p["close_price"] - p["lock_price"], 4) if p.get("close_price") and p.get("lock_price") else None
     out["tx_url"] = chain.tx_url(p.get("tx_hash"))
@@ -195,7 +259,7 @@ def analyst_profile(handle: str):
 
 @app.get("/api/picks/{pick_id}/candles")
 def candles(pick_id: int):
-    p = db.connect().execute("SELECT instrument_symbol, posted_at, start_time FROM picks WHERE id=?", (pick_id,)).fetchone()
+    p = db.connect().execute("SELECT instrument_symbol, posted_at, start_time, position FROM picks WHERE id=?", (pick_id,)).fetchone()
     if not p:
         raise HTTPException(404)
     try:
@@ -203,6 +267,8 @@ def candles(pick_id: int):
     except Exception as e:
         raise HTTPException(502, f"Gemini candles unavailable: {e}")
     start = datetime.fromisoformat(p["start_time"].replace("Z", "+00:00")).timestamp() * 1000
+    if (p["position"] or "yes") == "no":  # candles are YES prices; a NO position is 1 - YES
+        rows = [{**c, **{k: round(1 - c[k], 4) for k in ("open", "high", "low", "close")}} for c in rows]
     return {"candles": [c for c in rows if c["t"] <= start][-72:], "posted_at": p["posted_at"], "start_time": p["start_time"]}
 
 
@@ -210,11 +276,20 @@ def candles(pick_id: int):
 def preview(text: str):
     """Dry run: parse a post and match it to a live Gemini moneyline. Stores nothing."""
     parsed = parse_pick(text)
-    if parsed is None:
-        return {"ok": False, "message": "Not a pick. Try \"Arizona ML 2u\"."}
-    if isinstance(parsed, Rejection):
-        return {"ok": False, "message": parsed.reason}
-    assert isinstance(parsed, ParsedPick)
+    if not isinstance(parsed, ParsedPick):
+        leg = slips.parse_typed(text)
+        if leg is None:
+            return {"ok": False, "message": parsed.reason if isinstance(parsed, Rejection)
+                    else "Not a pick. Try \"Arizona ML 2u\", \"Pistons -5.5 2u\" or \"Tyrese Maxey over 5.5 assists\"."}
+        m = market_match.match_leg(leg, datetime.now(timezone.utc), gemini.markets())
+        if isinstance(m, market_match.NoMatch):
+            return {"ok": False, "message": f"{leg.describe()}: {m.reason}"}
+        price = market_match.position_price(m.game, m.side, m.position)
+        return {"ok": True, "team": leg.describe(), "units": slips.message_meta(text)[0] or 1.0, "message": "Would lock",
+                "matches": [{"ticker": m.game.ticker, "title": m.game.title, "start_time": m.game.start_time.isoformat(),
+                             "side": f"{m.position.upper()} · {m.side.label}", "price": price, "gemini_url": m.game.market_url,
+                             "venues": [{"venue": "Gemini", "price": price, "url": m.game.market_url, "primary": True,
+                                         "cheapest": True, "note": "grades this pick"}]}]}
     matches = gemini.match(parsed.team)
     if not matches:
         return {"ok": False, "message": f"No upcoming Gemini moneyline for \"{parsed.team}\"."}
@@ -238,8 +313,8 @@ def markets():
 
 def badge_svg(name: str, rec: dict) -> str:
     tier = rec["tier"]
-    label = {"sharp": "Receipts Verified · Sharp", "verified": "Receipts Verified",
-             "unverified": "Receipts · Unverified (observed)"}[tier]
+    label = {"sharp": "PickProof Verified · Sharp", "verified": "PickProof Verified",
+             "unverified": "PickProof · Unverified (observed)"}[tier]
     color = {"sharp": "#0A7A4B", "verified": "#1F6FEB", "unverified": "#6B7280"}[tier]
     wr = f"{rec['win_rate'] * 100:.0f}%" if rec.get("win_rate") is not None else "no graded picks"
     stat = f"{rec['wins']}-{rec['losses']} · {wr} · {rec['units']:+.1f}u · Gemini-graded"
@@ -264,4 +339,4 @@ def badge(handle: str):
 
 @app.get("/")
 def root():
-    return {"name": "Receipts API", "client": "Chrome extension", "docs": "/docs"}
+    return {"name": "PickProof API", "client": "Chrome extension", "docs": "/docs"}

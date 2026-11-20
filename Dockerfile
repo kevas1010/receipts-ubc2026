@@ -1,4 +1,4 @@
-# Receipts API with Tesseract OCR for bet-slip screenshots. Used by render.yaml (free tier).
+# PickProof API with Tesseract OCR for bet-slip screenshots. Used by render.yaml (free tier).
 FROM python:3.12-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
