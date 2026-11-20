@@ -1,129 +1,113 @@
-# Receipts
+# Receipts: every pick has a receipt
 
-Tamper-proof moneyline records for sports cappers, graded on **Gemini Predictions**.
+A **Chrome extension** that grades sports pick sellers ("analysts") from what they actually posted in Discord,
+using **Gemini Predictions** as the source of truth for prices and results, with tamper-evident commits on
+**Arc testnet**. No standalone site: everything happens in a side panel next to Discord, plus a small badge
+next to each analyst's name in the chat.
 
-Cappers keep posting picks in Discord the way they already do. Receipts locks each moneyline with the
-live Gemini price, timestamps it from the message ID (which can't be faked), commits a keccak hash to
-**Arc testnet**, catches edits and deletes, and grades the pick from Gemini settlement. The badge
-rewards a complete, untouched month, not a hot streak.
+You sign in as one of two roles:
 
-Everything here runs on free services: Gemini, Kalshi and Polymarket public market data (no keys),
-a free Discord bot, Arc testnet (free faucet USDC for gas), X's public oEmbed, SQLite, and Render's free tier.
+| | Tailer (consumer) | Analyst (posts picks) |
+|---|---|---|
+| Goal | Know which sellers are actually good before paying | Prove a real record to buyers |
+| What Receipts does | Reads the picks analysts posted in channels you can already see, matches each to the Gemini game, prices it at the Gemini price when it was posted, grades it from Gemini settlement | Claim your Discord account, become **Verified** immediately, and from then on every pick you post is tracked live |
+| Sees | Per-channel and global analyst scorecards, badges in Discord, each pick with its Gemini price, close, chart and result | Verified status, a badge with your tracked win rate, share text, storefront link, a "post a pick" box |
+
+### Verified vs Unverified
+
+* **Unverified** (never claimed): Receipts keeps scraping their past posts as tailers scroll. The record is
+  labelled **observed** and may be incomplete. Not registering never implies dishonesty.
+* **Verified** (claimed the Discord account): free, can't be bought, no waiting period. From the moment of
+  verification Receipts **stops scraping** them. Their public record is every pick they post after
+  verifying, tracked live. Older scraped picks are shown separately as "before verification".
+* **Verified Sharp** (optional achievement): the original one-month rules over tracked picks, all in `.env`:
+  30 days of history, 15 graded picks, 10 active days, zero edits or deletes, every pick pregame, positive
+  units at Gemini prices, non-negative closing line value. The demo uses a 4-day window.
+
+### How claiming works
+
+The analyst gets a one-time code (`RCPT-XXXXXX`) in the side panel and posts it in any Discord channel. The
+first Receipts extension that sees that message (theirs or any tailer's) reports it, and the message's author
+becomes the verified account. Only the person logged into that Discord account can post as it, so that's the
+ownership proof.
+
+### What the extension reads, and what it doesn't
+
+* Only messages Discord has already rendered on your screen, in channels you can already open.
+* No Discord API calls, no Discord token, no auto-scrolling, nothing posted. There's a switch to turn reading off.
+* Post times come from Discord message IDs (snowflakes), which encode creation time and can't be edited.
 
 ## Gemini Prediction Markets usage
 
-Gemini is the only market that touches a pick's record.
-
 | Job | Endpoint | Field |
 |---|---|---|
-| Find eligible games | `GET /v1/prediction-markets/events?status=active&category=sports` | tickers ending `-M` (moneylines); `-S`/`-T` skipped |
-| Match the team | same | `contracts[].label`, `participants[].name`, `abbreviatedName` |
-| Lock-time check | same | `startTime` vs. the post ID's timestamp |
-| Price at lock | same / `GET /v1/prediction-markets/events/{ticker}` | `prices.bestAsk`, falling back to `prices.buy.yes` |
-| Closing line | event by ticker, ~10 min before start | `prices.bestAsk` |
-| Closing line fallback, demo seed, profile sparklines | `GET /v2/candles/{instrumentSymbol}/1hr` | hourly close |
-| Grade | event by ticker | `status=settled`, `contracts[].resolutionSide` (`yes` = win) |
-| Disputed games | `status=under_review` | stays open, void after 4 days unsettled |
+| Find games | `GET /v1/prediction-markets/events?status=active&category=sports` and `status=settled` | tickers ending `-M` (moneylines) |
+| Match a post to a game | same | contract labels, participant names, abbreviations, `startTime` (game must start after the post and within 48 h) |
+| Price at lock (live) | event list / `GET /v1/prediction-markets/events/{ticker}` | `prices.bestAsk`, falling back to `prices.buy.yes` |
+| Price at post time (scraped picks) and closing line | `GET /v2/candles/{instrumentSymbol}/1hr` | hourly close at the post time / 10 min before start |
+| Grade | event by ticker | `status=settled`, `contracts[].resolutionSide` |
+| Disputed | `under_review` | stays open, void after 4 days |
 
-Gemini shows up for users as the price on every lock receipt, "Graded on Gemini Predictions" on every
-embed and page, Gemini listed first ("grades this pick") in the price comparison, a "Tail on Gemini"
-link, and per-pick Gemini price charts on profiles. Kalshi and Polymarket appear only in the comparison
-for verified cappers, compared on ask price. Gemini wins ties, and the star always goes to the venue that is
-actually cheapest. Set `SHOW_OTHER_VENUES=false` to hide them.
+Gemini is listed first in every price comparison ("grades this pick"). Kalshi and Polymarket are shown for
+verified analysts' new picks, compared on ask price; the star goes to whichever venue is actually cheapest.
+
+**Limit:** Gemini's settled-events API reaches back about five days, so older scraped posts come back as
+"no Gemini game" instead of being guessed.
 
 ## Layout
 
 | Path | What it does |
 |---|---|
-| `receipts/parse.py` | Moneyline-only parser; rejects spreads, totals, props, parlays, stakes over `MAX_UNITS` |
-| `receipts/gemini.py` | Gemini client: discovery, matching (soonest game per team, asks when the name fits two teams), prices, settlement, candles, retries |
-| `receipts/service.py` | Lock, flag edits and deletes, closing-line snapshot, grading, re-anchoring |
-| `receipts/verify.py` | Rolling-window rules, record, units at Gemini prices, closing line value, tiers |
-| `receipts/odds.py` | Gemini-first comparison with Kalshi and Polymarket |
-| `receipts/chain.py`, `contracts/PickRegistry.sol` | keccak commits, Arc testnet anchoring (no web3 dependency) |
-| `receipts/bot.py` | Discord bot: auto-lock, edit/delete callouts, `/record`, `/leaderboard`, `/import_x`, role sync |
-| `receipts/web.py` | JSON API, embeddable SVG badge, serves the UI |
-| `receipts/seed_demo.py` | Demo cappers from real settled Gemini games and real Gemini candle prices |
-| `web/` | React UI built with [Astryx](https://astryx.atmeta.com/) (Meta's design system): leaderboard, profiles, "Try a pick" |
-| `tests/` | 36 offline tests |
+| `extension/` | The Chrome extension (Manifest V3). Side panel UI in React with [Astryx](https://astryx.atmeta.com/); `public/content.js` reads Discord and paints badges; `public/background.js` talks to the API |
+| `extension/dev/discord-fixture.html` | A Discord-shaped test page with real settled games, for testing the content script without Discord |
+| `receipts/observe.py` | Grades observed Discord messages: scrape unverified authors, track verified ones, catch claim codes and edits |
+| `receipts/analysts.py` | Tailer and analyst sign-in, the claim code flow, storefront links |
+| `receipts/verify.py` | Verified / Unverified records and the Verified Sharp rules |
+| `receipts/web.py` | The API the extension uses, plus the shareable SVG badge |
+| `receipts/gemini.py`, `parse.py`, `service.py`, `odds.py`, `chain.py`, `contracts/PickRegistry.sol` | Gemini client, moneyline parser, locking and grading, venue comparison, Arc commits |
+| `receipts/bot.py` | Optional Discord bot (auto-lock in `#moneyline` channels, `/record`, `/leaderboard`, `/import_x`) |
+| `receipts/seed_demo.py` | Demo analysts from real settled Gemini games |
+| `tests/` | 45 offline tests |
 
-## Run it locally
+## Run it
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt      # macOS/Linux: .venv/bin/pip
-cp .env.example .env
-cd web && npm install && npm run build && cd ..
-python -m receipts.seed_demo                        # optional demo data
-uvicorn receipts.web:app --port 8000                # http://localhost:8000
-python -m receipts.bot                              # needs DISCORD_TOKEN
-python -m pytest -q tests
+.venv/Scripts/pip install -r requirements.txt        # macOS/Linux: .venv/bin/pip
+cp .env.example .env                                  # uncomment the demo block for the 4-day Sharp window
+python -m receipts.seed_demo                          # three labelled demo analysts
+uvicorn receipts.web:app --port 8000                  # the API the extension talks to
+cd extension && npm install && npm run build          # builds extension/dist
 ```
 
-For UI work, run `npm run dev` in `web/`; it proxies `/api` and `/badge` to port 8000.
+Then in Chrome: `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → pick `extension/dist`.
+Click the Receipts icon to open the side panel, sign in as a Tailer or an Analyst, and open a Discord channel
+on discord.com. If Discord was already open, reload that tab once.
 
-### Discord (free)
+The side panel's "Receipts server" field points the extension at a hosted API instead of localhost. Hosts on
+`*.onrender.com` are already allowed in the manifest. `render.yaml` deploys the API to Render's free tier.
 
-1. Create an application at https://discord.com/developers/applications and add a bot.
-2. Turn on the **Message Content** and **Server Members** intents.
-3. Invite it with the `bot` and `applications.commands` scopes and permissions to read and send messages,
-   read message history, embed links and manage roles.
-4. Create a channel whose name contains `moneyline` or `ml-picks`, and a role named `Verified Capper`
-   placed below the bot's role.
-5. Put the token in `.env` as `DISCORD_TOKEN`.
+Testing without Discord: run `npx vite` in `extension/` and open
+`http://localhost:5173/sidepanel.html` (the side panel) and `http://localhost:5173/dev/discord-fixture.html`
+(a Discord-shaped page that runs the real content script). Add `?post=RCPT-XXXXXX&as=frank` to post a claim code.
 
-### Arc testnet (free)
+## Demo analysts
 
-1. Get testnet USDC (gas) from https://faucet.circle.com for a fresh wallet.
-2. Deploy with Foundry (free):
-   `forge create contracts/PickRegistry.sol:PickRegistry --rpc-url https://rpc.testnet.arc.network --private-key $ARC_PRIVATE_KEY --broadcast`
-3. Put `ARC_PRIVATE_KEY` and `PICK_REGISTRY_ADDRESS` in `.env`.
-
-Without these, picks lock "unanchored": the hash is stored locally and anchored by the bot's 5-minute
-loop once a key is set. `chain.recent_commits()` reads `PickCommitted` logs from the public RPC, the free
-replacement for a paid event stream.
-
-### Deploy (free)
-
-`render.yaml` deploys the web app on Render's free tier. The free disk is wiped on restart, so the
-start command reseeds the demo from live Gemini data. Run the bot on your own machine, or on any
-always-on free host.
-
-## Verification rules
-
-All are `.env` settings and computed over a rolling window.
-
-| Rule | Default | Demo |
+| Analyst | Status | Why |
 |---|---|---|
-| Days since first logged pick | 30 | 4 |
-| Graded moneyline picks in the window | 15 | 8 |
-| Days with at least one pick | 10 | 3 |
-| Edits or deletes after lock | 0 | 0 |
-| Every pick posted before game start | all | all |
+| Sharp Sam | Verified · Sharp | Claimed, positive units and closing line value over the demo window |
+| Deleter Dan | Verified, not Sharp | Best record, but deleted a losing pick after lock |
+| Steady Steph | Unverified | Never claimed; record observed from scraped posts |
 
-**Verified** = every rule passes. **Verified · Sharp** = verified, positive units at Gemini prices,
-and non-negative average closing line value.
-
-The demo uses the compressed window (`DEMO_MODE=true`) and says so on every page. Rerun
-`python -m receipts.seed_demo` right before demoing so the rolling window covers the seeded games.
-
-## 90-second demo
-
-1. The problem: a capper's "7-0 week" screenshot with nothing behind it.
-2. In `#moneyline`, post a live game's pick (use `/try` to find one), e.g. `Detroit ML 2u`. The bot replies
-   "Locked" with the Gemini price, start time and Arc commit.
-3. Edit the message to the other team. The bot posts the original, as committed.
-4. Post a pick for a game that already started. The bot refuses it.
-5. Open the leaderboard: Deleter Dan has the best record but isn't verified because he deleted a loss.
-6. Post as a verified capper: the receipt shows Gemini first, then Kalshi and Polymarket, with the star
-   on the venue that's actually cheapest.
-7. Close on a profile: every pick, its Gemini price, the Gemini price chart, result and hash.
+All demo rows are labelled. Their games, prices and results are real Gemini data.
 
 ## Known limits
 
-- `GEMINI_MARKET_URL` is a placeholder (`https://www.gemini.com/predictions/{slug}`). Confirm the format
-  with the Gemini team.
-- Kalshi and Polymarket matching was checked live on NBA and NHL games. NFL and MLB use the same code but were not tested. College games usually show Gemini only.
-- X imports are accepted only before the game starts. Re-checking imported X posts for deletion after
-  the game is not built yet.
-- Telegram is not built.
+* The Discord reader depends on Discord's message markup (`li#chat-messages-CHANNEL-MESSAGE`, `message-username-*`,
+  `message-content-*`). All selectors live in `readMessages()` in `extension/public/content.js`.
+* Analysts with Discord's default avatar have no user ID in the page, so they're keyed by username until they claim.
+* A team name that fits several games (e.g. "Portland": Trail Blazers or the Portland Pilots) is reported as
+  ambiguous and not graded.
+* Deleted messages are only caught by the Discord bot, not by the extension.
+* Sign-in is a named session token for the hackathon: no passwords.
+* Not built: Telegram, X scraping in the extension (the bot's `/import_x` still works), payments.

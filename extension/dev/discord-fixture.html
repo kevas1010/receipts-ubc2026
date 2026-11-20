@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>#ml-picks | Fixture Server - Discord</title>
+  <link rel="stylesheet" href="/content.css" />
+  <style>
+    /* Rough Discord look, only so the test page is readable. Not shipped in the extension. */
+    body { margin: 0; background: #313338; color: #dbdee1; font: 15px/1.375 system-ui, 'Segoe UI', sans-serif; }
+    ol { list-style: none; margin: 0; padding: 16px 16px 16px 72px; }
+    li { position: relative; padding: 2px 0; }
+    li.head { margin-top: 16px; }
+    img[class*='avatar'] { position: absolute; left: -56px; top: 2px; width: 40px; height: 40px; border-radius: 50%; background: #5865f2; }
+    h3 { margin: 0; font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 4px; }
+    [class*='username'] { color: #f2f3f5; }
+    time { color: #949ba4; font-size: 12px; margin-left: 6px; }
+    .note { padding: 12px 72px; color: #949ba4; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <p class="note">Test page shaped like Discord's message list (li#chat-messages-CHANNEL-MESSAGE). Message IDs are real Discord snowflakes for the times shown.</p>
+  <ol id="list"></ol>
+  <script>
+    // Picks for real settled Gemini games (starts Nov 20, 01:00-03:00 UTC), posted Nov 19 evening UTC.
+    const CHANNEL = '901000000000000001';
+    const AUTHORS = {
+      carl: {id: '300000000000000001', name: 'Capper Carl'},
+      frank: {id: '300000000000000002', name: 'Fade Frank'},
+    };
+    const POSTS = [
+      ['carl', '2026-11-19T19:02:00Z', 'Tonight\'s card 🔒'],
+      ['carl', '2026-11-19T19:03:00Z', 'San Antonio ML 2u'],
+      ['carl', '2026-11-19T19:03:30Z', 'Portland ML 1u'],
+      ['carl', '2026-11-19T19:04:00Z', 'Colorado ML 1.5u (edited)', true],
+      ['carl', '2026-11-19T19:05:00Z', 'Calgary ML 2u'],
+      ['carl', '2026-11-19T19:06:00Z', 'Lakers -4.5 2u'],
+      ['frank', '2026-11-19T20:10:00Z', 'gm degens'],
+      ['frank', '2026-11-19T20:11:00Z', 'Minnesota ML 3u'],
+      ['frank', '2026-11-19T20:12:00Z', 'Vegas ML 2u'],
+      ['frank', '2026-11-19T20:13:00Z', 'Seattle ML 1u'],
+    ];
+    // ?post=TEXT&as=frank appends a message posted now (e.g. an analyst's RCPT- claim code).
+    const q = new URLSearchParams(location.search);
+    if (q.get('post')) {
+      POSTS.push([q.get('as') || 'frank', new Date().toISOString(), q.get('post')]);
+    }
+    const snowflake = iso => ((BigInt(Date.parse(iso)) - 1420070400000n) << 22n).toString();
+    const list = document.getElementById('list');
+    let prev = null;
+    for (const [who, at, text, edited] of POSTS) {
+      const a = AUTHORS[who];
+      const mid = snowflake(at);
+      const li = document.createElement('li');
+      li.id = `chat-messages-${CHANNEL}-${mid}`;
+      const head = prev !== who;
+      li.className = head ? 'head' : '';
+      li.innerHTML = (head
+        ? `<img class="avatar_abc" src="https://cdn.discordapp.com/avatars/${a.id}/0.webp?size=80" alt="">
+           <h3 class="header_abc"><span id="message-username-${mid}" class="headerText_abc"><span class="username_abc">${a.name}</span></span><time>${new Date(at).toLocaleString()}</time></h3>`
+        : '') +
+        `<div id="message-content-${mid}" class="markup_abc messageContent_abc"></div>`;
+      const content = li.querySelector(`#message-content-${mid}`);
+      content.textContent = text.replace(' (edited)', '');
+      if (edited) {
+        content.insertAdjacentHTML('beforeend', ' <span class="edited_abc"><time>(edited)</time></span>');
+      }
+      list.appendChild(li);
+      prev = who;
+    }
+    history.replaceState(null, '', `/channels/900000000000000001/${CHANNEL}`);
+
+    // Stand-in for the extension's background worker: same messages, same API.
+    const session = () => JSON.parse(localStorage.getItem('receipts') || '{}');
+    async function call(path, body) {
+      const s = session();
+      const r = await fetch((s.apiBase || 'http://localhost:8000') + path, {
+        method: body ? 'POST' : 'GET',
+        headers: {'Content-Type': 'application/json', ...(s.token ? {Authorization: 'Bearer ' + s.token} : {})},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (!r.ok) throw new Error(r.status + ' ' + (await r.text()));
+      return r.json();
+    }
+    window.__fixtureLog = [];
+    window.chrome = {runtime: {
+      lastError: null,
+      sendMessage(msg, cb) {
+        const p = msg.type === 'OBSERVE' ? call('/api/observations', {messages: msg.messages})
+          : msg.type === 'LOOKUP' ? call('/api/badges?ids=' + encodeURIComponent(msg.ids.join(',')))
+          : Promise.resolve({ok: true, handle: msg.handle});
+        p.then(r => { window.__fixtureLog.push({type: msg.type, r}); cb && cb(r); })
+         .catch(e => { window.__fixtureLog.push({type: msg.type, error: String(e)}); cb && cb({error: String(e)}); });
+      },
+      onMessage: {addListener() {}},
+    }};
+  </script>
+  <script src="/content.js"></script>
+</body>
+</html>

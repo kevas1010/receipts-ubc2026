@@ -18,10 +18,10 @@ from .gemini import Game, GeminiClient, Side
 from .snowflake import discord_id_for
 
 CAPPERS = [
-    # id, name, wins, losses, wants_positive_clv
-    ("demo:sharp-sam", "Sharp Sam", 8, 4, True),
-    ("demo:steady-steph", "Steady Steph", 4, 6, False),
-    ("demo:deleter-dan", "Deleter Dan", 9, 2, False),
+    # id, name, wins, losses, wants_positive_clv, verified (claimed account)
+    ("demo:sharp-sam", "Sharp Sam", 8, 3, True, True),            # Verified Sharp
+    ("demo:deleter-dan", "Deleter Dan", 9, 2, False, True),       # Verified, not Sharp: deleted a loss
+    ("demo:steady-steph", "Steady Steph", 6, 4, False, False),    # Unverified: graded from scraped posts
 ]
 
 
@@ -56,7 +56,7 @@ def candidates(gem: GeminiClient, now: datetime, days: float) -> list[dict]:
     return out
 
 
-def insert(conn, capper_id: str, c: dict, units: float, seq: int, anchor: bool) -> int:
+def insert(conn, capper_id: str, c: dict, units: float, seq: int, anchor: bool, mode: str = "live") -> int:
     g: Game = c["game"]
     s: Side = c["side"]
     post_id = str(discord_id_for(c["posted"], seq))
@@ -65,16 +65,16 @@ def insert(conn, capper_id: str, c: dict, units: float, seq: int, anchor: bool) 
                                    event_ticker=g.ticker, side_label=s.label, units=units,
                                    lock_price=c["lock"], posted_at=service.iso(c["posted"]))
     h = chain.commit_hash(payload)
-    tx = chain.anchor(h, f"demo:{post_id}") if anchor else None
+    tx = chain.anchor(h, f"demo:{post_id}") if anchor and mode == "live" else None
     cur = conn.execute(
         """INSERT INTO picks(capper_id, source, post_id, text, team_query, units, event_ticker, event_title, event_slug,
            league, side_label, side_abbr, instrument_symbol, start_time, posted_at, locked_at, lock_price, close_price,
-           result, graded_at, commit_hash, tx_hash)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           result, graded_at, commit_hash, tx_hash, mode, channel_id, channel_name)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (capper_id, "demo", post_id, text, s.label, units, g.ticker, g.title, g.slug, g.league, s.label,
          s.abbreviation, s.instrument_symbol, service.iso(g.start_time), service.iso(c["posted"]),
          service.iso(c["posted"]), c["lock"], c["close"], "win" if c["win"] else "loss",
-         service.iso(g.start_time + timedelta(hours=3)), h, tx))
+         service.iso(g.start_time + timedelta(hours=3)), h, tx, mode, "demo-channel", "moneyline-picks (demo)"))
     return cur.lastrowid
 
 
@@ -95,7 +95,7 @@ def seed(anchor: bool = False, days: float | None = None) -> None:
     rng = random.Random(42)
     used: set[str] = set()
     seq = 0
-    for capper_id, name, wins, losses, positive_clv in CAPPERS:
+    for capper_id, name, wins, losses, positive_clv, verified in CAPPERS:
         service.ensure_capper(capper_id, name, demo=True, handle=capper_id.split(":")[1], conn=conn)
         window_start = now - timedelta(days=settings.window_days) + timedelta(hours=2)
         mine = [c for c in pool if c["game"].ticker not in used and c["posted"] >= window_start]
@@ -120,13 +120,19 @@ def seed(anchor: bool = False, days: float | None = None) -> None:
                 seen.add(c["game"].ticker)
                 unique.append(c)
         chosen = unique
+        mode = "live" if verified else "scraped"
         with db.tx(conn):
+            if verified:
+                first_post = min(c["posted"] for c in chosen) - timedelta(hours=1)
+                conn.execute("UPDATE cappers SET verified_at=?, storefront_url=? WHERE id=?",
+                             (service.iso(first_post),
+                              "https://example.com/receipts-demo-storefront" if positive_clv else None, capper_id))
             pick_ids = []
             for c in sorted(chosen, key=lambda c: c["posted"]):
                 used.add(c["game"].ticker)
                 seq += 1
                 units = rng.choice([1, 1, 1.5, 2, 2, 3])
-                pick_ids.append((insert(conn, capper_id, c, units, seq, anchor), c))
+                pick_ids.append((insert(conn, capper_id, c, units, seq, anchor, mode), c))
             if capper_id == "demo:deleter-dan":
                 loss = max((pid for pid, c in pick_ids if not c["win"]), default=None)
                 if loss is None:
@@ -136,7 +142,7 @@ def seed(anchor: bool = False, days: float | None = None) -> None:
                     + timedelta(hours=3))
                 conn.execute("INSERT INTO pick_events(pick_id, kind, at) VALUES (?, 'delete', ?)", (loss, at))
                 conn.execute("UPDATE picks SET status='deleted' WHERE id=?", (loss,))
-        print(f"seeded {name}: {len(chosen)} picks")
+        print(f"seeded {name}: {len(chosen)} picks ({'verified' if verified else 'unverified, scraped'})")
 
 
 if __name__ == "__main__":

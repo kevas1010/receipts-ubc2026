@@ -1,0 +1,185 @@
+// Receipts content script for discord.com.
+//
+// Reads only the messages Discord has already rendered for the signed-in user (no Discord API calls, no
+// tokens, no auto-scrolling), sends them to Receipts for Gemini grading, and puts a small record badge
+// next to each analyst's name. The DOM shape lives in one place, readMessages(), so it is easy to adjust.
+(() => {
+  if (window.__receiptsLoaded) {
+    return;
+  }
+  window.__receiptsLoaded = true;
+
+  const SENT = new Map(); // message_id -> text already reported (re-sent if the text changes)
+  const BADGES = new Map(); // capper id -> badge data
+  let lastAuthor = null;
+
+  // ---- DOM reading ------------------------------------------------------------------------
+  function context() {
+    const m = location.pathname.match(/^\/channels\/(@me|\d+)\/(\d+)/);
+    const title = document.title || '';
+    const name = (title.match(/#\s*([^|\s]+)/) || [])[1] || null;
+    return {guildId: m ? m[1] : null, channelId: m ? m[2] : null, channelName: name};
+  }
+
+  function capperId(authorId, name) {
+    return authorId && /^\d+$/.test(authorId) ? 'discord:' + authorId : 'discordname:' + String(name || '').toLowerCase();
+  }
+
+  function messageText(li) {
+    const content = li.querySelector('[id^="message-content-"]');
+    if (!content) {
+      return {text: '', edited: false};
+    }
+    const clone = content.cloneNode(true);
+    let edited = false;
+    clone.querySelectorAll('[class*="edited"], time').forEach(el => {
+      if (/edited/i.test(el.textContent || '') || /edited/i.test(el.className || '')) {
+        edited = true;
+        el.remove();
+      }
+    });
+    return {text: (clone.innerText || clone.textContent || '').trim(), edited};
+  }
+
+  /** Discord message rows: <li id="chat-messages-{channelId}-{messageId}">. Continuation rows have no
+   * header, so the author carries over from the row above. */
+  function readMessages() {
+    const ctx = context();
+    const out = [];
+    lastAuthor = null;
+    document.querySelectorAll('li[id^="chat-messages-"]').forEach(li => {
+      const ids = li.id.match(/chat-messages-(\d+)-(\d+)/);
+      if (!ids) {
+        return;
+      }
+      const nameEl = li.querySelector('[id^="message-username-"] [class*="username"], [id^="message-username-"]');
+      const avatar = li.querySelector('img[class*="avatar"]');
+      if (nameEl) {
+        const src = avatar ? avatar.getAttribute('src') || '' : '';
+        const idMatch = src.match(/\/avatars\/(\d+)\//);
+        lastAuthor = {
+          name: (nameEl.textContent || '').trim(),
+          id: idMatch ? idMatch[1] : null,
+          avatar: src && !src.includes('/embed/avatars/') ? src : null,
+          nameEl,
+        };
+      }
+      if (!lastAuthor) {
+        return;
+      }
+      const {text, edited} = messageText(li);
+      if (!text) {
+        return;
+      }
+      out.push({
+        message_id: ids[2],
+        channel_id: ids[1],
+        guild_id: ctx.guildId,
+        channel_name: ctx.channelName,
+        author_id: lastAuthor.id,
+        author_name: lastAuthor.name,
+        avatar_url: lastAuthor.avatar,
+        text,
+        edited,
+        _nameEl: nameEl || null,
+      });
+    });
+    return out;
+  }
+
+  // ---- reporting ----------------------------------------------------------------------------
+  function send(type, payload) {
+    return new Promise(resolve => {
+      try {
+        chrome.runtime.sendMessage({type, ...payload}, r => resolve(chrome.runtime.lastError ? {error: chrome.runtime.lastError.message} : r));
+      } catch (e) {
+        resolve({error: String(e)}); // extension reloaded: this old script is orphaned
+      }
+    });
+  }
+
+  async function scan(force) {
+    const msgs = readMessages();
+    const fresh = msgs.filter(m => force || SENT.get(m.message_id) !== m.text);
+    let result = null;
+    if (fresh.length) {
+      const batch = fresh.slice(0, 200).map(({_nameEl, ...m}) => m);
+      result = await send('OBSERVE', {messages: batch});
+      if (result && !result.error && !result.skipped) {
+        batch.forEach(m => SENT.set(m.message_id, m.text));
+      }
+    }
+    await paintBadges(msgs);
+    return {context: context(), visible: msgs.length, sent: fresh.length, result};
+  }
+
+  // ---- badges -------------------------------------------------------------------------------
+  async function paintBadges(msgs) {
+    const heads = msgs.filter(m => m._nameEl);
+    const ids = [...new Set(heads.map(m => capperId(m.author_id, m.author_name)))];
+    const missing = ids.filter(id => !BADGES.has(id));
+    if (missing.length) {
+      const r = await send('LOOKUP', {ids: missing});
+      if (r && !r.error) {
+        missing.forEach(id => BADGES.set(id, r[id] || null));
+      }
+    }
+    heads.forEach(m => {
+      const data = BADGES.get(capperId(m.author_id, m.author_name));
+      const host = m._nameEl.closest('[id^="message-username-"]') || m._nameEl;
+      let el = host.parentElement && host.parentElement.querySelector(':scope > .rcpt-badge');
+      if (!data || (!data.wins && !data.losses && !data.pending && data.tier === 'unverified')) {
+        if (el) {
+          el.remove();
+        }
+        return;
+      }
+      if (!el) {
+        el = document.createElement('button');
+        el.type = 'button';
+        el.className = 'rcpt-badge';
+        el.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          send('OPEN_ANALYST', {handle: el.dataset.handle});
+        });
+        host.insertAdjacentElement('afterend', el);
+      }
+      const wr = data.win_rate == null ? '–' : Math.round(data.win_rate * 100) + '%';
+      const verified = data.tier !== 'unverified';
+      const label = verified
+        ? `${data.tier === 'sharp' ? '✓ Sharp' : '✓ Verified'} · ${wr} · ${data.wins}-${data.losses}`
+        : `Observed · ${wr} · ${data.wins}-${data.losses}`;
+      // Only touch the DOM when something changed, or our own edits would retrigger the observer forever.
+      if (el.textContent !== label || el.dataset.tier !== data.tier) {
+        el.dataset.handle = data.handle;
+        el.dataset.tier = data.tier;
+        el.textContent = label;
+        el.title = verified
+          ? 'Receipts Verified: every pick since verification, graded on Gemini Predictions. Click for details.'
+          : 'Receipts: graded from posts tailers have seen. May be incomplete. Click for details.';
+      }
+    });
+  }
+
+  // ---- triggers -----------------------------------------------------------------------------
+  let timer = null;
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => scan(false), 1200);
+  };
+  new MutationObserver(schedule).observe(document.body, {childList: true, subtree: true});
+  setInterval(() => BADGES.clear(), 60_000); // refresh records once a minute
+  schedule();
+
+  chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+    if (msg.type === 'SCAN') {
+      scan(true).then(reply);
+      return true;
+    }
+    if (msg.type === 'CONTEXT') {
+      reply({context: context(), visible: readMessages().length});
+    }
+    return false;
+  });
+})();

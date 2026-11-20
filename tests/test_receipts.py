@@ -183,8 +183,10 @@ def test_profit_at_gemini_price():
     assert verify.profit("void", 2, 0.25) == 0
 
 
-def _month(conn, gem_events, deleted=False):
+def _month(conn, gem_events, deleted=False, verified=True):
     service.ensure_capper("discord:9", "Nine", conn=conn)
+    if verified:
+        conn.execute("UPDATE cappers SET verified_at=? WHERE id='discord:9'", (service.iso(NOW - timedelta(days=41)),))
     start = NOW - timedelta(days=settings.window_days - 1)
     for i in range(settings.min_picks + 1):
         posted = start + timedelta(days=i % (settings.min_active_days + 2), hours=i)
@@ -204,19 +206,125 @@ def test_clean_month_is_verified_sharp(conn):
     _month(conn, [])
     rec = verify.compute("discord:9", conn, NOW)
     assert all(r.passed for r in rec.rules), rec.rules
-    assert rec.tier == "sharp" and rec.avg_clv == pytest.approx(0.05)
+    assert rec.tier == "sharp" and rec.avg_clv == pytest.approx(0.05) and rec.record_kind == "tracked"
 
 
-def test_one_delete_blocks_verification(conn):
+def test_delete_keeps_verified_but_blocks_sharp(conn):
     _month(conn, [], deleted=True)
     rec = verify.compute("discord:9", conn, NOW)
-    assert rec.tier == "unverified"
+    assert rec.tier == "verified"
     assert not next(r for r in rec.rules if r.key == "untouched").passed
+
+
+def test_unregistered_is_unverified_with_observed_record(conn):
+    _month(conn, [], verified=False)
+    rec = verify.compute("discord:9", conn, NOW)
+    assert rec.tier == "unverified" and rec.record_kind == "observed" and rec.rules == []
+    assert rec.graded > 0
 
 
 def test_new_capper_not_verified(conn):
     service.ensure_capper("discord:2", "New", conn=conn)
     assert verify.compute("discord:2", conn, NOW).tier == "unverified"
+
+
+# ---- accounts, claim, observation -----------------------------------------
+from receipts import analysts, observe  # noqa: E402
+
+
+def test_login_roles(conn):
+    t = analysts.login("tailer", "Tess", conn)
+    assert t["role"] == "tailer" and analysts.user_by_token(t["token"], conn)["id"] == t["id"]
+    with pytest.raises(ValueError):
+        analysts.login("admin", "x", conn)
+
+
+def test_tailer_cannot_claim(conn):
+    t = analysts.login("tailer", "Tess", conn)
+    with pytest.raises(PermissionError):
+        analysts.start_claim(t, "tess", conn)
+
+
+def msg(mid, text, author="555", name="Capper Carl", **kw):
+    return {"message_id": str(mid), "channel_id": "c1", "guild_id": "g1", "channel_name": "ml-picks",
+            "author_id": author, "author_name": name, "text": text, **kw}
+
+
+class SettledPool:
+    def __init__(self, games):
+        self._g = games
+
+    def games(self):
+        return self._g
+
+
+def settled_game(start, winner=0):
+    e = ev("NBA-X-M", "Arizona", "UConn", start, status="settled",
+           res=("yes", "no") if winner == 0 else ("no", "yes"))
+    return to_game(e)
+
+
+def test_claim_code_posted_in_discord_verifies_author(conn):
+    a = analysts.login("analyst", "Carl", conn)
+    code = analysts.start_claim(a, "Capper Carl", conn)
+    res = observe.ingest([msg(discord_id_for(NOW), f"verifying {code}")], FakeGemini([]), SettledPool([]), conn=conn, now=NOW)
+    assert res[0]["outcome"] == "claimed"
+    me = analysts.user_by_token(a["token"], conn)
+    assert me["capper_id"] == "discord:555" and me["claim_code"] is None
+    assert verify.compute("discord:555", conn, NOW).tier == "verified"
+
+
+def test_scraped_past_pick_is_graded_from_gemini(conn):
+    posted = NOW - timedelta(days=2)
+    game = settled_game(posted + timedelta(hours=3), winner=0)
+    res = observe.ingest([msg(discord_id_for(posted), "Arizona ML 2u")], FakeGemini([]), SettledPool([game]), conn=conn, now=NOW)
+    assert res[0]["outcome"] == "scraped"
+    p = conn.execute("SELECT * FROM picks").fetchone()
+    assert p["mode"] == "scraped" and p["result"] == "win" and p["lock_price"] == 0.55  # candle at post time
+    assert p["posted_at"] == service.iso(posted)  # from the message ID, not the clock
+    rec = verify.compute("discord:555", conn, NOW)
+    assert rec.tier == "unverified" and rec.wins == 1
+
+
+def test_verified_analyst_is_no_longer_scraped(conn):
+    posted_before = NOW - timedelta(days=2)
+    service.ensure_capper("discord:555", "Capper Carl", conn=conn)
+    conn.execute("UPDATE cappers SET verified_at=? WHERE id='discord:555'", (service.iso(NOW - timedelta(days=1)),))
+    conn.commit()
+    game = settled_game(posted_before + timedelta(hours=3))
+    res = observe.ingest([msg(discord_id_for(posted_before), "Arizona ML 2u")], FakeGemini([]), SettledPool([game]), conn=conn, now=NOW)
+    assert res[0]["outcome"] == "before_verification"
+    assert conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == 0
+
+
+def test_verified_new_post_is_tracked_live(conn):
+    service.ensure_capper("discord:555", "Capper Carl", conn=conn)
+    conn.execute("UPDATE cappers SET verified_at=? WHERE id='discord:555'", (service.iso(NOW - timedelta(days=1)),))
+    conn.commit()
+    gem = FakeGemini([ev("NBA-Y-M", "Arizona", "UConn", NOW + timedelta(hours=3))])
+    res = observe.ingest([msg(discord_id_for(NOW - timedelta(minutes=5)), "Arizona ML 1u")], gem,
+                         SettledPool(gem.moneylines()), conn=conn, now=NOW)
+    assert res[0]["outcome"] == "tracked"
+    p = conn.execute("SELECT * FROM picks").fetchone()
+    assert p["mode"] == "live" and p["lock_price"] == 0.4 and p["result"] == "pending"
+
+
+def test_observation_edit_flags_and_dedupes(conn):
+    posted = NOW - timedelta(days=2)
+    pool = SettledPool([settled_game(posted + timedelta(hours=3))])
+    m = msg(discord_id_for(posted), "Arizona ML 2u")
+    observe.ingest([m], FakeGemini([]), pool, conn=conn, now=NOW)
+    assert observe.ingest([m], FakeGemini([]), pool, conn=conn, now=NOW)[0]["outcome"] == "seen"
+    assert observe.ingest([{**m, "text": "UConn ML 2u"}], FakeGemini([]), pool, conn=conn, now=NOW)[0]["outcome"] == "edited"
+    row = conn.execute("SELECT edited_flag, text FROM picks").fetchone()
+    assert row["edited_flag"] == 1 and row["text"] == "Arizona ML 2u"
+
+
+def test_observation_skips_games_far_from_post(conn):
+    posted = NOW - timedelta(days=4)
+    game = settled_game(posted + timedelta(days=3))
+    res = observe.ingest([msg(discord_id_for(posted), "Arizona ML")], FakeGemini([]), SettledPool([game]), conn=conn, now=NOW)
+    assert res[0]["outcome"] == "no_game"
 
 
 # ---- chain + misc ---------------------------------------------------------
@@ -232,9 +340,9 @@ def test_calldata_encoding():
     assert data[:4] == chain.COMMIT_SELECTOR and len(data) == 4 + 32 * 4
 
 
-def test_badge_svg_escapes():
-    svg = badge_svg("<Dan>", "unverified", 9, 2, 3.1)
-    assert "&lt;Dan&gt;" in svg and "Not verified" in svg
+def test_badge_svg_shows_win_rate_and_escapes():
+    svg = badge_svg("<Dan>", {"tier": "verified", "wins": 9, "losses": 3, "win_rate": 0.75, "units": 3.1})
+    assert "&lt;Dan&gt;" in svg and "Receipts Verified" in svg and "75%" in svg
 
 
 def test_quote_implied():

@@ -55,9 +55,47 @@ CREATE TABLE IF NOT EXISTS pick_events (
     at TEXT NOT NULL,
     new_text TEXT
 );
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,             -- tailer | analyst
+    name TEXT NOT NULL,
+    token TEXT UNIQUE NOT NULL,
+    capper_id TEXT REFERENCES cappers(id),   -- analysts: the Discord identity they claimed
+    claim_code TEXT,                -- one-time code the analyst posts in Discord to prove ownership
+    claim_handle TEXT,              -- the Discord username they say is theirs
+    created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS picks_capper ON picks(capper_id);
 CREATE INDEX IF NOT EXISTS picks_result ON picks(result);
 """
+
+# Columns added after the first schema. Each is added if missing, so old databases keep working.
+MIGRATIONS = {
+    "cappers": {
+        "discord_id": "TEXT",
+        "verified_at": "TEXT",          # set when an analyst claims the account: Verified from then on
+        "storefront_url": "TEXT",
+        "first_seen": "TEXT",
+        "last_seen": "TEXT",
+    },
+    "picks": {
+        "mode": "TEXT NOT NULL DEFAULT 'live'",   # live = locked/tracked; scraped = graded from past posts
+        "channel_name": "TEXT",
+        "observed_at": "TEXT",
+        "edited_flag": "INTEGER NOT NULL DEFAULT 0",
+        "note": "TEXT",
+    },
+}
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    for table, cols in MIGRATIONS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, decl in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    conn.commit()
+
 
 _local = threading.local()
 
@@ -71,6 +109,7 @@ def connect(path: str | None = None) -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        migrate(conn)
         _local.conn, _local.path = conn, path
     return conn
 

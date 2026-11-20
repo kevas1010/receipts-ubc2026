@@ -60,7 +60,7 @@ def lock_embed(res: service.LockResult, capper: dict, rec: verify.Record | None)
             price = fmt_pct(q["price"])
             lines.append(f"**{q['venue']}** {price}{tag}{star}" if q["primary"] else f"{q['venue']} {price}{star}")
         e.add_field(name="Where to tail", value="\n".join(lines), inline=False)
-    e.set_footer(text=f"Graded on Gemini Predictions · {settings.public_url}/c/{capper['handle']}")
+    e.set_footer(text="Graded on Gemini Predictions · see the full record in the Receipts Chrome extension")
     return e
 
 
@@ -159,9 +159,9 @@ async def record_cmd(interaction: discord.Interaction, user: discord.Member | No
     user = user or interaction.user
     capper = capper_for(user)
     rec = verify.compute(capper["id"])
-    tier = {"sharp": "✅ Verified · Sharp", "verified": "✅ Verified", "unverified": "Not verified yet"}[rec.tier]
-    e = discord.Embed(title=f"{capper['display_name']} — {tier}", color=GEMINI_GREEN,
-                      url=f"{settings.public_url}/c/{capper['handle']}")
+    tier = {"sharp": "✅ Verified · Sharp", "verified": "✅ Verified", "unverified": "Unverified (observed record)"}[rec.tier]
+    e = discord.Embed(title=f"{capper['display_name']} — {tier}", color=GEMINI_GREEN)
+    e.set_thumbnail(url=f"{settings.public_url}/badge/{capper['handle']}.svg")
     e.add_field(name="Record", value=f"{rec.wins}-{rec.losses}" + (f" ({rec.voids} void)" if rec.voids else ""))
     e.add_field(name="Units at Gemini prices", value=f"{rec.units:+.2f}u")
     e.add_field(name="CLV", value=f"{rec.avg_clv * 100:+.1f} pts" if rec.avg_clv is not None else "n/a")
@@ -175,8 +175,7 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     rows = verify.leaderboard()[:10]
     lines = [f"**{i + 1}. {r['display_name']}** {'✅' if r['verified'] else '·'} {r['wins']}-{r['losses']}, {r['units']:+.2f}u"
              for i, r in enumerate(rows)] or ["No picks yet."]
-    e = discord.Embed(title="Receipts leaderboard", description="\n".join(lines), color=GEMINI_GREEN,
-                      url=f"{settings.public_url}/")
+    e = discord.Embed(title="Receipts leaderboard", description="\n".join(lines), color=GEMINI_GREEN)
     e.set_footer(text="Graded on Gemini Predictions")
     await interaction.response.send_message(embed=e)
 
