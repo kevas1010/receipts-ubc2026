@@ -60,7 +60,7 @@ def lock_embed(res: service.LockResult, capper: dict, rec: verify.Record | None)
             price = fmt_pct(q["price"])
             lines.append(f"**{q['venue']}** {price}{tag}{star}" if q["primary"] else f"{q['venue']} {price}{star}")
         e.add_field(name="Where to tail", value="\n".join(lines), inline=False)
-    e.set_footer(text="Graded on Gemini Predictions · see the full record in the Receipts Chrome extension")
+    e.set_footer(text="Graded on Gemini Predictions · see the full record in the PickProof Chrome extension")
     return e
 
 
@@ -97,7 +97,7 @@ async def do_lock(message: discord.Message, text: str, choose_ticker: str | None
 async def on_ready():
     await tree.sync()
     background.start()
-    log.info("Receipts bot ready as %s", client.user)
+    log.info("PickProof bot ready as %s", client.user)
 
 
 @client.event
@@ -175,7 +175,7 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     rows = verify.leaderboard()[:10]
     lines = [f"**{i + 1}. {r['display_name']}** {'✅' if r['verified'] else '·'} {r['wins']}-{r['losses']}, {r['units']:+.2f}u"
              for i, r in enumerate(rows)] or ["No picks yet."]
-    e = discord.Embed(title="Receipts leaderboard", description="\n".join(lines), color=GEMINI_GREEN)
+    e = discord.Embed(title="PickProof leaderboard", description="\n".join(lines), color=GEMINI_GREEN)
     e.set_footer(text="Graded on Gemini Predictions")
     await interaction.response.send_message(embed=e)
 
@@ -250,9 +250,9 @@ async def sync_roles():
                 continue
             try:
                 if row["verified"] and role not in member.roles:
-                    await member.add_roles(role, reason="Receipts: verification rules passed")
+                    await member.add_roles(role, reason="PickProof: verification rules passed")
                 elif not row["verified"] and role in member.roles:
-                    await member.remove_roles(role, reason="Receipts: verification rules no longer pass")
+                    await member.remove_roles(role, reason="PickProof: verification rules no longer pass")
             except discord.Forbidden:
                 log.warning("Missing permission to manage %s in %s", settings.verified_role, guild.name)
 

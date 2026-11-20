@@ -300,7 +300,20 @@ def test_verified_analyst_is_no_longer_scraped(conn):
     assert conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == 0
 
 
-def test_verified_new_post_is_tracked_live(conn):
+def test_verified_analyst_is_not_scraped_by_default(conn):
+    """Verified analysts post through PickProof (hash-committed); the consumer scraper leaves them alone."""
+    service.ensure_capper("discord:555", "Capper Carl", conn=conn)
+    conn.execute("UPDATE cappers SET verified_at=? WHERE id='discord:555'", (service.iso(NOW - timedelta(days=1)),))
+    conn.commit()
+    gem = FakeGemini([ev("NBA-Y-M", "Arizona", "UConn", NOW + timedelta(hours=3))])
+    res = observe.ingest([msg(discord_id_for(NOW - timedelta(minutes=5)), "Arizona ML 1u")], gem,
+                         SettledPool(gem.moneylines()), conn=conn, now=NOW)
+    assert res[0]["outcome"] == "verified_source"
+    assert conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == 0
+
+
+def test_verified_new_post_is_tracked_live(conn, monkeypatch):
+    monkeypatch.setattr(observe.settings, "scrape_verified", True)
     service.ensure_capper("discord:555", "Capper Carl", conn=conn)
     conn.execute("UPDATE cappers SET verified_at=? WHERE id='discord:555'", (service.iso(NOW - timedelta(days=1)),))
     conn.commit()
@@ -345,7 +358,7 @@ def test_calldata_encoding():
 
 def test_badge_svg_shows_win_rate_and_escapes():
     svg = badge_svg("<Dan>", {"tier": "verified", "wins": 9, "losses": 3, "win_rate": 0.75, "units": 3.1})
-    assert "&lt;Dan&gt;" in svg and "Receipts Verified" in svg and "75%" in svg
+    assert "&lt;Dan&gt;" in svg and "PickProof Verified" in svg and "75%" in svg
 
 
 def test_quote_implied():

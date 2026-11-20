@@ -2,7 +2,7 @@
 
 Claiming: an analyst asks for a one-time code, posts it in any Discord channel, and the first extension that
 sees the message (theirs or any tailer's) reports it. The message's author is, by construction, the account
-that posted it, so the analyst's Receipts login is bound to that Discord identity and becomes Verified.
+that posted it, so the analyst's PickProof login is bound to that Discord identity and becomes Verified.
 """
 from __future__ import annotations
 
@@ -64,7 +64,31 @@ def confirm_from_message(capper_id: str, text: str, conn: sqlite3.Connection | N
     with db.tx(conn):
         conn.execute("UPDATE users SET capper_id=?, claim_code=NULL WHERE id=?", (capper_id, user["id"]))
         conn.execute("UPDATE cappers SET verified_at=COALESCE(verified_at, ?) WHERE id=?", (now, capper_id))
+    issue_credential(capper_id, conn)
     return dict(conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone())
+
+
+def credential_hash(capper_id: str, verified_at: str) -> str:
+    """The PickProof credential: keccak256 of the analyst id and verification time. Anyone can recompute it."""
+    from eth_utils import keccak
+    return "0x" + keccak(text=f"pickproof:v1:{capper_id}:{verified_at}").hex()
+
+
+def issue_credential(capper_id: str, conn: sqlite3.Connection) -> str | None:
+    c = conn.execute("SELECT verified_at, credential FROM cappers WHERE id=?", (capper_id,)).fetchone()
+    if not c or not c["verified_at"]:
+        return None
+    if c["credential"]:
+        return c["credential"]
+    h = credential_hash(capper_id, c["verified_at"])
+    with db.tx(conn):
+        conn.execute("UPDATE cappers SET credential=? WHERE id=?", (h, capper_id))
+    try:  # anchor on Arc when a key is configured; otherwise the hash is still recomputable
+        from . import chain
+        chain.anchor(h, f"credential:{capper_id}")
+    except Exception:
+        pass
+    return h
 
 
 def set_storefront(user: dict, url: str, conn: sqlite3.Connection | None = None) -> None:

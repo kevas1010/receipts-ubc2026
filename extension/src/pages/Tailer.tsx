@@ -84,7 +84,7 @@ function ChannelView({onOpen}: {onOpen: (h: string) => void}) {
       <Banner
         status="info"
         title="Open a Discord channel"
-        description="Go to a channel on discord.com where analysts post picks. If Discord was already open before you installed Receipts, reload that tab once."
+        description="Go to a channel on discord.com where analysts post picks. If Discord was already open before you installed PickProof, reload that tab once."
         endContent={<Button label="Try again" variant="secondary" onClick={refresh} />}
       />
     );
@@ -100,11 +100,11 @@ function ChannelView({onOpen}: {onOpen: (h: string) => void}) {
         </VStack>
         <Button label="Rescan" variant="secondary" size="sm" onClick={refresh} isLoading={busy} />
       </HStack>
-      {scan.result?.error && <Banner status="error" title="Receipts server error" description={scan.result.error} />}
+      {scan.result?.error && <Banner status="error" title="PickProof server error" description={scan.result.error} />}
       {error && <Banner status="error" title="Couldn't load analysts" description={error} />}
       <HStack gap={2} vAlign="center" hAlign="between" wrap="wrap">
         <Text type="supporting">
-          Scroll up in Discord to load older messages, or let Receipts scroll back 30 days for you. Bet slip screenshots are
+          Scroll up in Discord to load older messages, or let PickProof scroll back 30 days for you. Bet slip screenshots are
           read with OCR; every leg Gemini lists (moneyline, spread, total, player prop) is graded.
         </Text>
         <Button label="Load 30 days" variant="secondary" size="sm" onClick={() => void readHistory()} isLoading={loading} />

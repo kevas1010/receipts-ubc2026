@@ -121,7 +121,7 @@ export default function AnalystDetail({handle, onBack, badgeSrc}: {handle: strin
 
       {verified ? (
         <Text type="supporting">
-          {`Verified ${rec.verified_at ? when(rec.verified_at) : ''}. Receipts stopped scraping this analyst then; this record is every pick they've posted since, graded on Gemini Predictions.`}
+          {`Verified ${rec.verified_at ? when(rec.verified_at) : ''}. PickProof stopped scraping this analyst then; this record is every pick they've posted since, graded on Gemini Predictions.`}
         </Text>
       ) : (
         <Banner
@@ -131,7 +131,7 @@ export default function AnalystDetail({handle, onBack, badgeSrc}: {handle: strin
         />
       )}
 
-      {badgeSrc && verified && <img src={badgeSrc} alt={`${capper.display_name} Receipts badge`} height={56} />}
+      {badgeSrc && verified && <img src={badgeSrc} alt={`${capper.display_name} PickProof badge`} height={56} />}
 
       {capper.storefront_url && (
         <Link href={capper.storefront_url} isExternalLink isStandalone>

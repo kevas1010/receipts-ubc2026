@@ -1,7 +1,7 @@
-// Receipts content script for discord.com.
+// PickProof content script for discord.com.
 //
 // Reads only the messages Discord has already rendered for the signed-in user (no Discord API calls, no
-// tokens; it only scrolls when you press "Load 30 days"), sends them to Receipts for Gemini grading, and puts a small record badge
+// tokens; it only scrolls when you press "Load 30 days"), sends them to PickProof for Gemini grading, and puts a small record badge
 // next to each analyst's name. The DOM shape lives in one place, readMessages(), so it is easy to adjust.
 (() => {
   if (window.__receiptsLoaded) {
@@ -191,8 +191,8 @@
         el.dataset.tier = data.tier;
         el.textContent = label;
         el.title = verified
-          ? 'Receipts Verified: every pick since verification, graded on Gemini Predictions. Click for details.'
-          : 'Receipts: graded from posts tailers have seen. May be incomplete. Click for details.';
+          ? 'PickProof Verified: every pick since verification, graded on Gemini Predictions. Click for details.'
+          : 'PickProof: graded from posts tailers have seen. May be incomplete. Click for details.';
       }
     });
   }

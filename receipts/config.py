@@ -36,6 +36,9 @@ class Settings:
     max_edits: int = field(default_factory=lambda: _int("VERIFY_MAX_EDITS", 0))
     max_units: float = field(default_factory=lambda: _float("MAX_UNITS", 10))
     demo_mode: bool = field(default_factory=lambda: _bool("DEMO_MODE", False))
+    # Verified analysts carry a PickProof credential and post through PickProof (hash-committed picks), so the
+    # consumer scraper leaves their new Discord posts alone. Set true to keep grading them from Discord too.
+    scrape_verified: bool = field(default_factory=lambda: _bool("SCRAPE_VERIFIED", False))
 
     # Grading
     close_snapshot_minutes: int = field(default_factory=lambda: _int("CLOSE_SNAPSHOT_MINUTES", 10))

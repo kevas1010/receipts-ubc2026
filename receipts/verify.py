@@ -1,6 +1,6 @@
 """Two statuses and one achievement.
 
-* Unverified: an analyst who never claimed their account. Receipts grades the past posts tailers' extensions
+* Unverified: an analyst who never claimed their account. PickProof grades the past posts tailers' extensions
   observe ("scraped"), and labels the record observed and possibly incomplete.
 * Verified: the analyst claimed their Discord account. From that moment they are no longer scraped; their
   record is every pick they post after verification ("tracked").

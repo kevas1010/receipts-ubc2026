@@ -1,25 +1,27 @@
-# Receipts: every pick has a receipt
+# PickProof: proof before you tail
 
 A **Chrome extension** that grades sports pick sellers ("analysts") from what they actually posted in Discord,
 using **Gemini Predictions** as the source of truth for prices and results, with tamper-evident commits on
 **Arc testnet**. No standalone site: everything happens in a side panel next to Discord, plus a small badge
 next to each analyst's name in the chat.
 
-You sign in as one of two roles:
+The side panel opens on a start page with two paths, **For customers** and **For analysts**:
 
-| | Tailer (consumer) | Analyst (posts picks) |
+| | For customers (tailers) | For analysts (post picks) |
 |---|---|---|
 | Goal | Know which sellers are actually good before paying | Prove a real record to buyers |
-| What Receipts does | Reads the picks analysts posted in channels you can already see, matches each to the Gemini game, prices it at the Gemini price when it was posted, grades it from Gemini settlement | Claim your Discord account, become **Verified** immediately, and from then on every pick you post is tracked live |
-| Sees | Per-channel and global analyst scorecards, badges in Discord, each pick with its Gemini price, close, chart and result | Verified status, a badge with your tracked win rate, share text, storefront link, a "post a pick" box |
+| What PickProof does | Reads the picks analysts posted in channels you can already see (typed or bet slip screenshots), matches each leg to the Gemini contract that settles it, prices it at the Gemini price when it was posted, grades it from Gemini settlement | Three-step verification: claim your Discord account, get a **PickProof credential** (a public keccak256 hash), then post hash-committed picks through PickProof |
+| Sees | Per-channel and global analyst scorecards, badges in Discord, each pick with its Gemini price, close, chart and result | Verification steps, the credential, a "post a pick" box, a simulator on last week's settled Gemini markets, a badge and share text |
 
 ### Verified vs Unverified
 
-* **Unverified** (never claimed): Receipts keeps scraping their past posts as tailers scroll. The record is
+* **Unverified** (never claimed): PickProof keeps scraping their past posts as tailers scroll. The record is
   labelled **observed** and may be incomplete. Not registering never implies dishonesty.
-* **Verified** (claimed the Discord account): free, can't be bought, no waiting period. From the moment of
-  verification Receipts **stops scraping** them. Their public record is every pick they post after
-  verifying, tracked live. Older scraped picks are shown separately as "before verification".
+* **Verified** (claimed the Discord account): free, can't be bought, no waiting period. They get a PickProof
+  credential, `keccak256("pickproof:v1:<analyst id>:<verified at>")`, anchored on Arc when a key is set. From
+  the moment of verification the customer scraper **stops reading** their Discord posts (`SCRAPE_VERIFIED=false`,
+  the default): their public record is every pick they post through PickProof, each with a hash commitment.
+  Older scraped picks are shown separately as "before verification".
 * **Verified Sharp** (optional achievement): the original one-month rules over tracked picks, all in `.env`:
   30 days of history, 15 graded picks, 10 active days, zero edits or deletes, every pick pregame, positive
   units at Gemini prices, non-negative closing line value. The demo uses a 4-day window.
@@ -27,7 +29,7 @@ You sign in as one of two roles:
 ### How claiming works
 
 The analyst gets a one-time code (`RCPT-XXXXXX`) in the side panel and posts it in any Discord channel. The
-first Receipts extension that sees that message (theirs or any tailer's) reports it, and the message's author
+first PickProof extension that sees that message (theirs or any tailer's) reports it, and the message's author
 becomes the verified account. Only the person logged into that Discord account can post as it, so that's the
 ownership proof.
 
@@ -98,13 +100,14 @@ posts come back as "no Gemini market" instead of being guessed. NO prices are Ge
 | `receipts/ocr.py` | Tesseract OCR for bet-slip images (full pass + right-column pass, cached) |
 | `receipts/slips.py` | Slip text → legs (moneyline, spread, total, player prop), units and payout from the message |
 | `receipts/markets.py` | Leg → Gemini contract + YES/NO position, exact lines only |
+| `receipts/import_export.py` | Import channel exports, stage analysts for the demo, list what's loaded |
 | `receipts/analysts.py` | Tailer and analyst sign-in, the claim code flow, storefront links |
 | `receipts/verify.py` | Verified / Unverified records and the Verified Sharp rules |
 | `receipts/web.py` | The API the extension uses, plus the shareable SVG badge |
 | `receipts/gemini.py`, `parse.py`, `service.py`, `odds.py`, `chain.py`, `contracts/PickRegistry.sol` | Gemini client, moneyline parser, locking and grading, venue comparison, Arc commits |
 | `receipts/bot.py` | Optional Discord bot (auto-lock in `#moneyline` channels, `/record`, `/leaderboard`, `/import_x`) |
 | `receipts/seed_demo.py` | Demo analysts from real settled Gemini games |
-| `tests/` | 77 offline tests (the Tesseract one is skipped if Tesseract isn't installed); `tests/test_slips.py` uses OCR text from 11 real analyst slips (`tests/fixtures/real_slips/`) and real Gemini contract wording |
+| `tests/` | 80 offline tests (the Tesseract one is skipped if Tesseract isn't installed); `tests/test_slips.py` uses OCR text from 11 real analyst slips (`tests/fixtures/real_slips/`) and real Gemini contract wording |
 
 ## Run it
 
@@ -118,10 +121,10 @@ cd extension && npm install && npm run build          # builds extension/dist
 ```
 
 Then in Chrome: `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → pick `extension/dist`.
-Click the Receipts icon to open the side panel, sign in as a Tailer or an Analyst, and open a Discord channel
+Click the PickProof icon to open the side panel, sign in as a Tailer or an Analyst, and open a Discord channel
 on discord.com. If Discord was already open, reload that tab once.
 
-The side panel's "Receipts server" field points the extension at a hosted API instead of localhost. Hosts on
+The side panel's "PickProof server" field points the extension at a hosted API instead of localhost. Hosts on
 `*.onrender.com` are already allowed in the manifest. `render.yaml` deploys the API (Docker, with Tesseract)
 to Render's free tier.
 
@@ -130,6 +133,27 @@ Testing without Discord: run `npx vite` in `extension/` and open
 (a Discord-shaped page that runs the real content script, including bet slip screenshots). Add
 `?post=RCPT-XXXXXX&as=frank` to post a claim code. Set `OCR_ALLOW_LOCAL=1` in `.env` so the server may read the
 test page's slip images from localhost.
+
+## Demo with real Discord data
+
+1. **Export the analyst channels.** Each export is a DiscordChatExporter-format JSON file of the messages the
+   signed-in user can see (`pickproof-export-X.json`, ...). They were made in the browser by scrolling each
+   channel; no Discord token or API. Image links in an export expire after about a day, so import the same day.
+2. **Import them** (OCR, Gemini matching and grading; slow the first time, cached after):
+   ```bash
+   python -m receipts.import_export exports/*.json
+   ```
+3. **Stage one analyst for the live demo.** A staged analyst is fully imported and graded but hidden. When you
+   open their channel and press **Load 30 days**, the scan reveals the already-checked record in seconds:
+   ```bash
+   python -m receipts.import_export --stage Jesse
+   python -m receipts.import_export --list          # check what's loaded and staged
+   ```
+4. **Snapshot it.** Stop the server and copy `receipts.db` to `demo.db`; set `RECEIPTS_DB` to a copy of `demo.db`
+   to run the demo, so it can be reset. Don't commit either file: they hold real usernames and picks.
+5. Set `DEMO_MODE=true` in `.env` to show the **Verify instantly (demo)** button on the analyst path, so the
+   verification flow can be shown without posting a claim code in Discord. Demo-verified analysts are labelled
+   demo.
 
 ## Demo analysts
 

@@ -1,4 +1,4 @@
-// Receipts background service worker: the only part of the extension that talks to the Receipts API.
+// PickProof background service worker: the only part of the extension that talks to the PickProof API.
 // The content script and side panel send it messages; it adds the signed-in token and forwards them.
 
 const DEFAULT_API = 'http://localhost:8000';

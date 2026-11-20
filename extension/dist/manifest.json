@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Receipts",
-  "short_name": "Receipts",
+  "name": "PickProof",
+  "short_name": "PickProof",
   "version": "0.3.0",
   "description": "Every pick has a receipt. Gemini-graded records for sports pick sellers, right inside Discord.",
   "action": {
-    "default_title": "Open Receipts",
+    "default_title": "Open PickProof",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

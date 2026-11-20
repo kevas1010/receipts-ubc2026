@@ -235,3 +235,31 @@ def test_analyst_locks_spread_and_prop(conn):
     bad = service.lock_pick(capper_id="discord:1", source="receipts", post_id="a3", text="Bucks +6.5",
                             posted_at=NOW, gemini=LiveFake(live), conn=conn, anchor=False)
     assert not bad.ok and "9.5" in bad.message
+
+
+# ---- demo staging and channel exports -------------------------------------------------------
+def test_staged_analyst_is_hidden_until_load(conn):
+    from receipts import import_export, verify
+    posted = NOW - timedelta(days=5)
+    games = market_games(posted + timedelta(hours=8))
+    m = discord_msg(posted, "NBA 2U", ["https://media.discordapp.net/attachments/1/2/a.png"])
+    observe.ingest([m], Fake(games), Pool(games), conn=conn, now=NOW, read_image=lambda u: "Milwaukee Bucks\n+9.5 Spread")
+    assert import_export.stage("X", conn) == ["X"]
+    ids = [r[0] for r in conn.execute("SELECT id FROM cappers WHERE demo_staged=0")]
+    assert verify.leaderboard(conn, capper_ids=ids) == []                 # hidden from the consumer list
+    res = observe.ingest([m], Fake(games), Pool(games), conn=conn, now=NOW, read_image=lambda u: "")
+    assert res[0]["outcome"] == "scraped" and res[0]["bet"] == "Milwaukee Bucks +9.5"   # Load reveals the checked record
+    assert conn.execute("SELECT demo_staged FROM cappers WHERE display_name='X'").fetchone()[0] == 0
+
+
+def test_export_mapping_and_credential():
+    from receipts import analysts, import_export
+    data = {"guild": {"id": "g"}, "channel": {"id": "c", "name": "X"}, "messages": [
+        {"id": "1573189795574976603", "content": "NBA 2U", "author": {"id": "7", "name": "x", "nickname": "X"},
+         "attachments": [{"url": "https://media.discordapp.net/attachments/1/2/IMG.png?ex=1&is=2&hm=3"},
+                         {"url": "https://media.discordapp.net/attachments/1/2/clip.mp4"}]},
+        {"id": "2", "content": "", "author": {"id": "7"}, "attachments": []}]}
+    msgs = import_export.messages_from_export(data)
+    assert len(msgs) == 1 and msgs[0]["author_name"] == "X" and len(msgs[0]["images"]) == 1
+    h = analysts.credential_hash("discord:7", "2026-11-20T00:00:00Z")
+    assert h.startswith("0x") and len(h) == 66 and h == analysts.credential_hash("discord:7", "2026-11-20T00:00:00Z")

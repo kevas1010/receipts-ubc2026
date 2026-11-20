@@ -100,6 +100,7 @@ def ingest(messages: list[dict], gemini: GeminiClient, pool: GamePool | None = N
     games: list[Game] | None = None
     all_games: list[Game] | None = None
     out = []
+    revealed: set[str] = set()
     for raw in messages:
         try:
             msg = Message.from_dict(raw)
@@ -110,6 +111,11 @@ def ingest(messages: list[dict], gemini: GeminiClient, pool: GamePool | None = N
         mid = msg.message_id
 
         capper = _touch_capper(msg, conn, now)
+        if capper.get("demo_staged"):  # pre-imported for the demo: pressing Load reveals the checked record
+            with db.tx(conn):
+                conn.execute("UPDATE cappers SET demo_staged=0 WHERE id=?", (msg.capper_id,))
+            capper["demo_staged"] = 0
+            revealed.add(msg.capper_id)
         claimed = analysts.confirm_from_message(msg.capper_id, msg.text, conn) if analysts.CODE_RE.search(msg.text) else None
         if claimed:
             out.append({"message_id": mid, "outcome": "claimed", "capper_id": msg.capper_id})
@@ -120,7 +126,17 @@ def ingest(messages: list[dict], gemini: GeminiClient, pool: GamePool | None = N
         if existing:
             text_pick = next((e for e in existing if e["post_id"] == mid and not (e.get("note") or "").startswith(SLIP_NOTE)), None)
             outcome = _recheck(text_pick, msg, conn) if text_pick else "seen"
+            if msg.capper_id in revealed and outcome == "seen":
+                for e in existing:
+                    out.append({"message_id": mid, "post_id": e["post_id"], "outcome": "scraped", "pick_id": e["id"],
+                                "bet": e.get("bet_text") or e.get("team_query"), "from_slip": "slip" in e["post_id"]})
+                continue
             out.append({"message_id": mid, "outcome": outcome, "pick_id": existing[0]["id"]})
+            continue
+
+        if capper.get("verified_at") and not settings.scrape_verified and posted_at >= parse_ts(capper["verified_at"]):
+            # Verified analysts post through PickProof (hash-committed); the consumer scraper skips them.
+            out.append({"message_id": mid, "outcome": "verified_source"})
             continue
 
         cands: list[Cand] = []

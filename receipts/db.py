@@ -77,6 +77,8 @@ MIGRATIONS = {
         "storefront_url": "TEXT",
         "first_seen": "TEXT",
         "last_seen": "TEXT",
+        "demo_staged": "INTEGER NOT NULL DEFAULT 0",  # imported but hidden until someone presses Load (demo)
+        "credential": "TEXT",                          # PickProof credential hash, issued at verification
     },
     "picks": {
         "mode": "TEXT NOT NULL DEFAULT 'live'",   # live = locked/tracked; scraped = graded from past posts

@@ -1,11 +1,12 @@
-"""API for the Receipts Chrome extension, plus the shareable SVG badge.  Run with:  uvicorn receipts.web:app
+"""API for the PickProof Chrome extension, plus the shareable SVG badge.  Run with:  uvicorn receipts.web:app
 
 There is no standalone site: every screen lives in the extension's side panel.
 """
 from __future__ import annotations
 
+import json
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +19,7 @@ from .config import settings
 from .gemini import GeminiClient
 from .parse import ParsedPick, Rejection, parse_pick
 
-app = FastAPI(title="Receipts API")
+app = FastAPI(title="PickProof API")
 # The extension calls from a chrome-extension:// origin; tokens, not cookies, carry identity.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
 gemini = GeminiClient()
@@ -30,7 +31,7 @@ def current_user(authorization: str | None = Header(default=None)) -> dict:
     token = (authorization or "").removeprefix("Bearer ").strip()
     user = analysts.user_by_token(token)
     if not user:
-        raise HTTPException(401, "Sign in from the Receipts extension")
+        raise HTTPException(401, "Sign in from the PickProof extension")
     return user
 
 
@@ -77,6 +78,62 @@ class ClaimIn(BaseModel):
 def claim(body: ClaimIn, user: dict = Depends(analyst_user)):
     code = analysts.start_claim(user, body.handle)
     return {"code": code, "instructions": f"Post {code} as a message in any Discord channel while the extension is on."}
+
+
+@app.post("/api/analyst/demo-verify")
+def demo_verify(user: dict = Depends(analyst_user)):
+    """DEMO_MODE only: verify the signed-in analyst without a Discord claim post, so the flow can be shown live.
+    The analyst is labelled demo everywhere."""
+    if not settings.demo_mode:
+        raise HTTPException(403, "Instant verification is only available in demo mode. Post your claim code in Discord.")
+    conn = db.connect()
+    capper_id = user.get("capper_id") or f"pickproof:{user['id']}"
+    service.ensure_capper(capper_id, user["name"], demo=True, conn=conn)
+    with db.tx(conn):
+        conn.execute("UPDATE users SET capper_id=?, claim_code=NULL WHERE id=?", (capper_id, user["id"]))
+        conn.execute("UPDATE cappers SET verified_at=COALESCE(verified_at, ?) WHERE id=?", (service.iso(datetime.now(timezone.utc)), capper_id))
+    credential = analysts.issue_credential(capper_id, conn)
+    return {"ok": True, "capper_id": capper_id, "credential": credential}
+
+
+# ---- analyst market simulator (last week's settled Gemini markets; nothing is stored) ----------------
+@app.get("/api/simulator/markets")
+def simulator_markets(kind: str | None = None):
+    now = datetime.now(timezone.utc)
+    games = [g for g in gemini.settled_markets(max_pages=10)
+             if g.start_time and now - timedelta(days=8) <= g.start_time <= now and g.scope == "full_contest"
+             and g.market_type in ("moneyline", "spread", "total", "prop") and (not kind or g.market_type == kind)]
+    games.sort(key=lambda g: g.start_time, reverse=True)
+    return [{"ticker": g.ticker, "title": g.title, "league": g.league, "type": g.market_type, "metric": g.metric,
+             "start_time": g.start_time.isoformat(), "gemini_url": g.market_url,
+             "contracts": [{"label": s.label, "resolution": s.resolution} for s in g.sides[:12]]}
+            for g in games[:80]]
+
+
+class SimIn(BaseModel):
+    ticker: str
+    label: str
+    position: str = Field(pattern="^(yes|no)$")
+    units: float = Field(gt=0, le=10)
+
+
+@app.post("/api/simulator/pick")
+def simulator_pick(body: SimIn, user: dict = Depends(analyst_user)):
+    g = gemini.event(body.ticker)
+    side = g.side(body.label)
+    if not side:
+        raise HTTPException(404, "No such contract")
+    yes = gemini.price_at(side.instrument_symbol, g.start_time - timedelta(minutes=60))
+    price = yes if yes is None or body.position == "yes" else round(1 - yes, 4)
+    result = ("win" if side.resolution == body.position else "loss") if side.resolution in ("yes", "no") else "pending"
+    payload = {"simulation": True, "analyst": user["name"], "ticker": g.ticker, "contract": side.label,
+               "position": body.position, "units": body.units, "price": price}
+    from eth_utils import keccak
+    h = "0x" + keccak(text=json.dumps(payload, sort_keys=True)).hex()
+    return {"title": g.title, "contract": side.label, "position": body.position, "price": price, "result": result,
+            "profit": round(verify.profit(result, body.units, price), 2) if price else None, "hash": h,
+            "start_time": g.start_time.isoformat(), "gemini_url": g.market_url,
+            "note": "Simulation on a settled Gemini market, priced one hour before start. Not added to your record."}
 
 
 class StorefrontIn(BaseModel):
@@ -144,9 +201,11 @@ def analysts_list(guild_id: str | None = None, channel_id: str | None = None):
     conn = db.connect()
     if guild_id or channel_id:
         col, val = ("channel_id", channel_id) if channel_id else ("guild_id", guild_id)
-        ids = [r[0] for r in conn.execute(f"SELECT DISTINCT capper_id FROM picks WHERE {col}=?", (val,))]
+        ids = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT p.capper_id FROM picks p JOIN cappers c ON c.id=p.capper_id WHERE p.{col}=? AND c.demo_staged=0", (val,))]
         return verify.leaderboard(conn, capper_ids=ids)
-    return verify.leaderboard(conn)
+    ids = [r[0] for r in conn.execute("SELECT id FROM cappers WHERE demo_staged=0")]
+    return verify.leaderboard(conn, capper_ids=ids)
 
 
 # ---- shared read endpoints -----------------------------------------------
@@ -254,8 +313,8 @@ def markets():
 
 def badge_svg(name: str, rec: dict) -> str:
     tier = rec["tier"]
-    label = {"sharp": "Receipts Verified · Sharp", "verified": "Receipts Verified",
-             "unverified": "Receipts · Unverified (observed)"}[tier]
+    label = {"sharp": "PickProof Verified · Sharp", "verified": "PickProof Verified",
+             "unverified": "PickProof · Unverified (observed)"}[tier]
     color = {"sharp": "#0A7A4B", "verified": "#1F6FEB", "unverified": "#6B7280"}[tier]
     wr = f"{rec['win_rate'] * 100:.0f}%" if rec.get("win_rate") is not None else "no graded picks"
     stat = f"{rec['wins']}-{rec['losses']} · {wr} · {rec['units']:+.1f}u · Gemini-graded"
@@ -280,4 +339,4 @@ def badge(handle: str):
 
 @app.get("/")
 def root():
-    return {"name": "Receipts API", "client": "Chrome extension", "docs": "/docs"}
+    return {"name": "PickProof API", "client": "Chrome extension", "docs": "/docs"}
