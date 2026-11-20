@@ -13,6 +13,15 @@ The side panel opens on a start page with two paths, **For customers** and **For
 | What PickProof does | Reads the picks analysts posted in channels you can already see (typed or bet slip screenshots), matches each leg to the Gemini contract that settles it, prices it at the Gemini price when it was posted, grades it from Gemini settlement | Three-step verification: claim your Discord account, get a **PickProof credential** (a public keccak256 hash), then post hash-committed picks through PickProof |
 | Sees | Per-channel and global analyst scorecards, badges in Discord, each pick with its Gemini price, close, chart and result | Verification steps, the credential, a "post a pick" box, a simulator on last week's settled Gemini markets, a badge and share text |
 
+## Demo screenshots
+
+| | |
+|---|---|
+| ![Start page](demo-screenshots/02-start-page.jpg)<br>Start page: customers or analysts | ![All analysts](demo-screenshots/03-all-analysts.jpg)<br>All analysts, verified first |
+| ![Sharp Sam scorecard](demo-screenshots/04-sharp-sam-scorecard.jpg)<br>A Verified Sharp scorecard | ![Picks graded on Gemini](demo-screenshots/05-picks-graded-on-gemini.jpg)<br>Each pick with Gemini price, close and hash |
+| ![Discord fixture](demo-screenshots/06-discord-fixture.jpg)<br>Discord-shaped test page (typed picks and bet slips) | ![Get verified](demo-screenshots/07-analyst-get-verified.jpg)<br>Analyst verification steps |
+| ![Verified credential](demo-screenshots/08-verified-credential.jpg)<br>Verified, with the PickProof credential | ![Post a pick](demo-screenshots/09-post-pick-and-badge.jpg)<br>Post a pick and share the badge |
+
 ### Verified vs Unverified
 
 * **Unverified** (never claimed): PickProof keeps scraping their past posts as tailers scroll. The record is
