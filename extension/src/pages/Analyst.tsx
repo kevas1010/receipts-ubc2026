@@ -10,7 +10,7 @@ import {SegmentedControl, SegmentedControlItem} from '@astryxdesign/core/Segment
 import {Spinner} from '@astryxdesign/core/Spinner';
 import {TextInput} from '@astryxdesign/core/TextInput';
 
-import {api, badgeUrl, pct, record, units, when, type Me, type Pick} from '../api';
+import {api, badgeUrl, pct, record, units, when, type Me, type Pick, betLabel, geminiSide} from '../api';
 import AnalystDetail from '../components/AnalystDetail';
 
 function ClaimCard({me, onChange}: {me: Me; onChange: () => void}) {
@@ -103,15 +103,15 @@ function PostPick({onPosted}: {onPosted: () => void}) {
       </Text>
       <HStack gap={2} vAlign="end">
         <StackItem size="fill">
-          <TextInput label="Moneyline" value={text} onChange={setText} placeholder="Arizona ML 2u" />
+          <TextInput label="Pick (moneyline, spread, total or player prop)" value={text} onChange={setText} placeholder="Pistons -5.5 2u · Maxey over 5.5 assists" />
         </StackItem>
         <Button label="Lock" variant="primary" onClick={() => submit()} isLoading={busy} isDisabled={!text.trim()} />
       </HStack>
       {result?.ok && result.pick && (
         <Banner
           status="success"
-          title={`Locked: ${result.pick.side_label} ML · ${result.pick.units}u`}
-          description={`${result.pick.event_title} · Gemini ${pct(result.pick.lock_price)} · starts ${when(result.pick.start_time)}`}
+          title={`Locked: ${betLabel(result.pick)} · ${result.pick.units}u`}
+          description={`${result.pick.event_title} · Gemini ${geminiSide(result.pick)} at ${pct(result.pick.lock_price)} · starts ${when(result.pick.start_time)}`}
         />
       )}
       {result && !result.ok && (

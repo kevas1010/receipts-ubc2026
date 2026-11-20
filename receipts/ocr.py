@@ -27,6 +27,7 @@ WINDOWS_PATHS = (r"C:\Program Files\Tesseract-OCR\tesseract.exe",
                  os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"))
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS ocr_cache (key TEXT PRIMARY KEY, text TEXT NOT NULL)"""
+CACHE_VERSION = "v2:"  # v2 = full pass + right-column pass; older rows are re-read once
 
 
 def tesseract_cmd() -> str | None:
@@ -58,9 +59,13 @@ def cache_key(url: str) -> str:
 
 
 # ---- OCR --------------------------------------------------------------------------------
-def image_text(data: bytes) -> str:
+def image_text(data: bytes, right_column: bool = True) -> str:
+    """Full-slip OCR, plus (by default) a second pass over the right-hand column, where pick'em apps print the
+    line and stat. The two are joined with slips.RIGHT_MARK so one cache row holds both."""
     import pytesseract
     from PIL import Image, ImageOps, ImageStat
+
+    from .slips import RIGHT_MARK
 
     cmd = tesseract_cmd()
     if not cmd:
@@ -75,7 +80,14 @@ def image_text(data: bytes) -> str:
     if ImageStat.Stat(img).mean[0] < 110:
         img = ImageOps.invert(img)
     img = ImageOps.autocontrast(img)
-    return pytesseract.image_to_string(img, config="--psm 6")
+    full = pytesseract.image_to_string(img, config="--psm 6")
+    if not right_column:
+        return full
+    w, h = img.size
+    col = img.crop((int(w * 0.62), 0, w, h))
+    col = col.resize((col.width * 2, col.height * 2), Image.LANCZOS)
+    right = pytesseract.image_to_string(col, config="--psm 6")
+    return full + RIGHT_MARK + right
 
 
 def fetch_and_read(url: str, conn: sqlite3.Connection | None = None, http: httpx.Client | None = None) -> str | None:
@@ -83,7 +95,7 @@ def fetch_and_read(url: str, conn: sqlite3.Connection | None = None, http: httpx
         return None
     conn = conn or db.connect()
     conn.execute(SCHEMA)
-    key = cache_key(url)
+    key = CACHE_VERSION + cache_key(url)
     hit = conn.execute("SELECT text FROM ocr_cache WHERE key=?", (key,)).fetchone()
     if hit:
         return hit[0]
@@ -131,6 +143,9 @@ def _clean(line: str) -> str:
 
 
 def read_slip(text: str) -> SlipRead:
+    from .slips import split_cached
+
+    text = split_cached(text)[0]
     lines = [l for l in (s.strip() for s in text.splitlines()) if l]
     joined = " ".join(lines)
     if PARLAY.search(joined):

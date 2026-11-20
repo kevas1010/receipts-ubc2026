@@ -77,6 +77,9 @@ export interface Pick extends Record<string, unknown> {
   channel_name: string | null;
   edited_flag: number;
   note: string | null;
+  position: 'yes' | 'no';
+  market_type: 'moneyline' | 'spread' | 'total' | 'prop';
+  bet_text: string;
   profit: number;
   clv: number | null;
   venues: VenueQuote[];
@@ -212,6 +215,37 @@ export async function scanDiscord(): Promise<ScanResult | null> {
     return (await chrome.tabs.sendMessage(tab.id, {type: 'SCAN'})) as ScanResult;
   } catch {
     return null; // content script not loaded yet (tab opened before install): a reload fixes it
+  }
+}
+
+/** The bet as the analyst made it, and the Gemini contract side that grades it. */
+export function betLabel(pick: Pick): string {
+  return pick.bet_text || `${pick.side_label} ML`;
+}
+export function geminiSide(pick: Pick): string {
+  return pick.market_type === 'moneyline' && pick.position !== 'no'
+    ? `YES · ${pick.side_label}`
+    : `${(pick.position || 'yes').toUpperCase()} · ${pick.side_label}`;
+}
+
+export interface HistoryProgress {
+  running: boolean;
+  messages: number;
+  oldest: string | null;
+  done?: boolean;
+  error?: string;
+}
+
+/** Ask the content script to scroll the open channel back `days` days, so every post gets read and graded. */
+export async function loadHistory(days: number): Promise<HistoryProgress | null> {
+  const tab = await discordTab();
+  if (!tab?.id) {
+    return null;
+  }
+  try {
+    return (await chrome.tabs.sendMessage(tab.id, {type: 'LOAD_HISTORY', days})) as HistoryProgress;
+  } catch {
+    return null;
   }
 }
 

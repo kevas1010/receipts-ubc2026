@@ -84,6 +84,9 @@ MIGRATIONS = {
         "observed_at": "TEXT",
         "edited_flag": "INTEGER NOT NULL DEFAULT 0",
         "note": "TEXT",
+        "position": "TEXT NOT NULL DEFAULT 'yes'",          # yes | no on the Gemini contract
+        "market_type": "TEXT NOT NULL DEFAULT 'moneyline'",  # moneyline | spread | total | prop
+        "bet_text": "TEXT",                                   # the bet as the analyst made it ("Bucks +9.5")
     },
 }
 

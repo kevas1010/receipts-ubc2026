@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from . import analysts, chain, db, ocr, service
+from . import analysts, chain, db, markets, ocr, service, slips
 from .config import settings
 from .gemini import Game, GeminiClient, Side, match_team, parse_ts
 from .parse import ParsedPick, Rejection, parse_pick
@@ -56,21 +56,26 @@ class Message:
 
 
 class GamePool:
-    """Active + settled Gemini moneylines, cached. Settled games reach back about five days."""
+    """Active + settled Gemini sports markets (moneylines, spreads, totals, props), cached.
+    Settled markets reach back about a week."""
 
     def __init__(self, gemini: GeminiClient, ttl: int = 600):
         self.gemini, self.ttl = gemini, ttl
         self._settled: tuple[float, list[Game]] | None = None
         self._lock = threading.Lock()
 
-    def games(self) -> list[Game]:
+    def all_markets(self) -> list[Game]:
         with self._lock:
             if not self._settled or time.time() - self._settled[0] > self.ttl:
-                self._settled = (time.time(), self.gemini.settled_moneylines())
+                self._settled = (time.time(), self.gemini.settled_markets())
             settled = self._settled[1]
-        active = self.gemini.moneylines()
+        active = self.gemini.markets()
         seen = {g.ticker for g in active}
         return active + [g for g in settled if g.ticker not in seen]
+
+    def games(self) -> list[Game]:
+        """Moneylines only (typed "Team ML" picks)."""
+        return [g for g in self.all_markets() if g.market_type == "moneyline" or g.ticker.endswith("-M")]
 
 
 def match_for_post(team: str, posted_at: datetime, games: list[Game]) -> list[tuple[Game, Side]]:
@@ -93,6 +98,7 @@ def ingest(messages: list[dict], gemini: GeminiClient, pool: GamePool | None = N
     now = now or datetime.now(timezone.utc)
     read_image = read_image or ocr.fetch_and_read
     games: list[Game] | None = None
+    all_games: list[Game] | None = None
     out = []
     for raw in messages:
         try:
@@ -112,32 +118,40 @@ def ingest(messages: list[dict], gemini: GeminiClient, pool: GamePool | None = N
         existing = [dict(r) for r in conn.execute(
             "SELECT * FROM picks WHERE source='discord' AND (post_id=? OR post_id LIKE ?)", (mid, f"{mid}:slip%"))]
         if existing:
-            text_pick = next((e for e in existing if e["post_id"] == mid and e.get("note") != SLIP_NOTE), None)
+            text_pick = next((e for e in existing if e["post_id"] == mid and not (e.get("note") or "").startswith(SLIP_NOTE)), None)
             outcome = _recheck(text_pick, msg, conn) if text_pick else "seen"
             out.append({"message_id": mid, "outcome": outcome, "pick_id": existing[0]["id"]})
             continue
 
-        candidates: list[tuple[str, ParsedPick, str, str | None]] = []  # post_id, parsed, text, note
-        rejection = None
+        cands: list[Cand] = []
+        rejections: list[str] = []
         parsed = parse_pick(msg.text)
         if isinstance(parsed, ParsedPick):
-            candidates.append((mid, parsed, msg.text, None))
-        elif isinstance(parsed, Rejection):
-            rejection = parsed.reason
-        if not candidates and msg.images:
+            cands.append(Cand(mid, parsed.team, parsed.units, msg.text, None, None))
+        elif isinstance(parsed, Rejection) and not msg.images and len(msg.text) <= 120:
+            leg = slips.parse_typed(msg.text)  # "Pistons -5.5 2u", "Maxey over 5.5 assists"
+            if leg:
+                units = slips.message_meta(msg.text)[0] or 1.0
+                cands.append(Cand(mid, leg.describe(), units, msg.text, None, leg))
+            else:
+                rejections.append(parsed.reason)
+        if not cands and msg.images:
             for url in msg.images[:3]:
                 slip_text = read_image(url)
                 if not slip_text:
                     continue
-                slip = ocr.read_slip(slip_text)
-                rejection = rejection or slip.rejected
-                for pick_text in slip.picks:
-                    pp = parse_pick(pick_text)
-                    if isinstance(pp, ParsedPick):
-                        candidates.append((f"{mid}:slip{len(candidates) + 1}", pp, pick_text, SLIP_NOTE))
-        if not candidates:
-            if rejection:
-                out.append({"message_id": mid, "outcome": "rejected", "reason": rejection})
+                slip = slips.parse_slip(slip_text, msg.text)
+                legs = [l for l in slip.legs if not l.needs_review]
+                rejections += [f"{l.describe()}: couldn't read this leg clearly." for l in slip.legs if l.needs_review]
+                if not legs:
+                    continue
+                stake = (slip.units or 1.0) / len(legs)
+                for k, leg in enumerate(legs, 1):
+                    note = SLIP_NOTE if len(legs) == 1 else f"{SLIP_NOTE} Leg {k} of {len(legs)}; the slip's stake is split evenly."
+                    cands.append(Cand(f"{mid}:slip{len(cands) + 1}", leg.describe(), round(stake, 3), leg.describe(), note, leg))
+        if not cands:
+            if rejections:
+                out.append({"message_id": mid, "outcome": "rejected", "reason": " ".join(dict.fromkeys(rejections))})
             else:
                 out.append({"message_id": mid, "outcome": "not_a_pick"})
             continue
@@ -147,24 +161,46 @@ def ingest(messages: list[dict], gemini: GeminiClient, pool: GamePool | None = N
             out.append({"message_id": mid, "outcome": "before_verification"})
             continue
 
-        if games is None:
-            games = (pool or GamePool(gemini)).games()
-        for post_id, parsed, text, note in candidates:
-            source = {"message_id": mid, "post_id": post_id, "from_slip": note == SLIP_NOTE}
-            matches = match_for_post(parsed.team, posted_at, games)
-            if not matches:
-                out.append({**source, "outcome": "no_game",
-                            "reason": f"No Gemini moneyline for \"{parsed.team}\" near that post (Gemini history covers about five days)."})
+        pool = pool or GamePool(gemini)
+        for c in cands:
+            source = {"message_id": mid, "post_id": c.post_id, "from_slip": bool(c.note), "bet": c.team_query}
+            if c.leg is None:  # typed moneyline: the original matching rules
+                games = games if games is not None else pool.games()
+                found = match_for_post(c.team_query, posted_at, games)
+                if not found:
+                    out.append({**source, "outcome": "no_game",
+                                "reason": f"No Gemini moneyline for \"{c.team_query}\" near that post (Gemini history covers about a week)."})
+                    continue
+                if len(found) > 1:
+                    out.append({**source, "outcome": "ambiguous",
+                                "reason": f"\"{c.team_query}\" fits {len(found)} games: " + ", ".join(g.title for g, _ in found[:3])})
+                    continue
+                game, side = found[0]
+                position, mtype = "yes", "moneyline"
+            else:
+                all_games = all_games if all_games is not None else pool.all_markets()
+                m = markets.match_leg(c.leg, posted_at, all_games)
+                if isinstance(m, markets.NoMatch):
+                    out.append({**source, "outcome": "no_game", "reason": f"{c.team_query}: {m.reason}"})
+                    continue
+                game, side, position, mtype = m.game, m.side, m.position, c.leg.kind
+            if conn.execute("SELECT 1 FROM picks WHERE source='discord' AND post_id=?", (c.post_id,)).fetchone():
                 continue
-            if len(matches) > 1:
-                out.append({**source, "outcome": "ambiguous",
-                            "reason": f"\"{parsed.team}\" fits {len(matches)} games: " + ", ".join(g.title for g, _ in matches[:3])})
-                continue
-            game, side = matches[0]
-            pick_id = _record(msg, parsed, game, side, posted_at, now, mode="live" if verified_at else "scraped",
-                              gemini=gemini, conn=conn, post_id=post_id, text=text, extra_note=note)
+            pick_id = _record(msg, c.team_query, c.units, game, side, posted_at, now,
+                              mode="live" if verified_at else "scraped", gemini=gemini, conn=conn,
+                              post_id=c.post_id, text=c.text, extra_note=c.note, position=position, market_type=mtype)
             out.append({**source, "outcome": "tracked" if verified_at else "scraped", "pick_id": pick_id})
     return out
+
+
+@dataclass
+class Cand:
+    post_id: str
+    team_query: str          # the bet in words ("Bucks +9.5", "Mario Hezonja over 5.5 Rebounds")
+    units: float
+    text: str
+    note: str | None
+    leg: slips.Leg | None    # None = typed moneyline handled by the original parser
 
 
 def _touch_capper(msg: Message, conn: sqlite3.Connection, now: datetime) -> dict:
@@ -188,31 +224,35 @@ def _recheck(pick: dict, msg: Message, conn: sqlite3.Connection) -> str:
     return "edited"
 
 
-def _record(msg: Message, parsed: ParsedPick, game: Game, side: Side, posted_at: datetime, now: datetime,
+def _record(msg: Message, bet: str, units: float, game: Game, side: Side, posted_at: datetime, now: datetime,
             mode: str, gemini: GeminiClient, conn: sqlite3.Connection, post_id: str | None = None,
-            text: str | None = None, extra_note: str | None = None) -> int:
+            text: str | None = None, extra_note: str | None = None, position: str = "yes",
+            market_type: str = "moneyline") -> int:
     post_id = post_id or msg.message_id
     text = text if text is not None else msg.text
     start = game.start_time
     note = None
-    if now < start and side.price is not None:
-        lock_price = side.price  # seen before the game: lock at the live Gemini price
+    flip = (lambda p: p) if position == "yes" else (lambda p: None if p is None else round(1 - p, 4))
+    live = markets.position_price(game, side, position)
+    if now < start and live is not None:
+        lock_price = live  # seen before the game: lock at the live Gemini price for this side
     else:
-        lock_price = _safe_price_at(gemini, side.instrument_symbol, posted_at)
+        lock_price = flip(_safe_price_at(gemini, side.instrument_symbol, posted_at))
         note = "Price from the Gemini candle at post time."
         if lock_price is None:  # market history starts after the post: use Gemini's first price
-            lock_price = _first_price(gemini, side.instrument_symbol)
+            lock_price = flip(_first_price(gemini, side.instrument_symbol))
             note = "Price is Gemini's earliest available price (its history starts after the post)."
     close_price = None
     if now >= start - timedelta(minutes=settings.close_snapshot_minutes):
-        close_price = _safe_price_at(gemini, side.instrument_symbol, start - timedelta(minutes=settings.close_snapshot_minutes))
+        close_price = flip(_safe_price_at(gemini, side.instrument_symbol, start - timedelta(minutes=settings.close_snapshot_minutes)))
     result = "pending"
     if game.status == "settled" and side.resolution in ("yes", "no"):
-        result = "win" if side.resolution == "yes" else "loss"
+        result = "win" if side.resolution == position else "loss"
 
     note = " ".join(n for n in (extra_note, note) if n) or None
+    committed_side = side.label if position == "yes" and market_type == "moneyline" else f"{position.upper()}: {side.label}"
     payload = chain.commit_payload(capper_id=msg.capper_id, source="discord", post_id=post_id, text=text,
-                                   event_ticker=game.ticker, side_label=side.label, units=parsed.units,
+                                   event_ticker=game.ticker, side_label=committed_side, units=units,
                                    lock_price=lock_price, posted_at=service.iso(posted_at))
     h = chain.commit_hash(payload)
     with db.tx(conn):
@@ -220,13 +260,13 @@ def _record(msg: Message, parsed: ParsedPick, game: Game, side: Side, posted_at:
             """INSERT INTO picks(capper_id, source, post_id, channel_id, guild_id, channel_name, text, team_query, units,
                event_ticker, event_title, event_slug, league, side_label, side_abbr, instrument_symbol, start_time,
                posted_at, locked_at, observed_at, lock_price, close_price, result, graded_at, commit_hash, mode,
-               edited_flag, note)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               edited_flag, note, position, market_type, bet_text)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (msg.capper_id, "discord", post_id, msg.channel_id, msg.guild_id, msg.channel_name, text,
-             parsed.team, parsed.units, game.ticker, game.title, game.slug, game.league, side.label, side.abbreviation,
+             bet, units, game.ticker, game.title, game.slug, game.league, side.label, side.abbreviation,
              side.instrument_symbol, service.iso(start), service.iso(posted_at), service.iso(now), service.iso(now),
              lock_price, close_price, result, service.iso(now) if result != "pending" else None, h, mode,
-             int(msg.edited), note))
+             int(msg.edited), note, position, market_type, bet))
         pick_id = cur.lastrowid
     if mode == "live":
         tx_hash = chain.anchor(h, f"discord:{post_id}")

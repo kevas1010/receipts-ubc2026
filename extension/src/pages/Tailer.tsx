@@ -8,7 +8,7 @@ import {FileInput} from '@astryxdesign/core/FileInput';
 import {SegmentedControl, SegmentedControlItem} from '@astryxdesign/core/SegmentedControl';
 import {Spinner} from '@astryxdesign/core/Spinner';
 
-import {api, messagesFromExport, scanDiscord, type AnalystRow, type ScanResult} from '../api';
+import {api, loadHistory, messagesFromExport, scanDiscord, type AnalystRow, type ScanResult} from '../api';
 import {AnalystList} from '../components/bits';
 import AnalystDetail from '../components/AnalystDetail';
 
@@ -19,8 +19,8 @@ const OUTCOME_LABEL: Record<string, string> = {
   tracked: 'tracked (verified)',
   before_verification: 'skipped: before verification',
   not_a_pick: 'not picks',
-  rejected: 'not moneylines',
-  no_game: 'no Gemini game',
+  rejected: 'not on Gemini',
+  no_game: 'no Gemini market',
   ambiguous: 'ambiguous team',
   seen: 'already seen',
   edited: 'edited',
@@ -42,6 +42,21 @@ function ChannelView({onOpen}: {onOpen: (h: string) => void}) {
   const [rows, setRows] = useState<AnalystRow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const readHistory = async () => {
+    setLoading(true);
+    setHistory('Scrolling back through this channel…');
+    const r = await loadHistory(30);
+    setLoading(false);
+    if (!r) {
+      setHistory('Open the channel on discord.com first.');
+      return;
+    }
+    setHistory(r.error ? r.error : `Read ${r.messages} messages back to ${r.oldest ? new Date(r.oldest).toLocaleDateString() : 'the start'}. Slips are graded as they arrive.`);
+    void refresh();
+  };
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -87,11 +102,16 @@ function ChannelView({onOpen}: {onOpen: (h: string) => void}) {
       </HStack>
       {scan.result?.error && <Banner status="error" title="Receipts server error" description={scan.result.error} />}
       {error && <Banner status="error" title="Couldn't load analysts" description={error} />}
-      <Text type="supporting">
-        Scroll up in Discord to load older messages; Receipts grades them as they appear.
-      </Text>
+      <HStack gap={2} vAlign="center" hAlign="between" wrap="wrap">
+        <Text type="supporting">
+          Scroll up in Discord to load older messages, or let Receipts scroll back 30 days for you. Bet slip screenshots are
+          read with OCR; every leg Gemini lists (moneyline, spread, total, player prop) is graded.
+        </Text>
+        <Button label="Load 30 days" variant="secondary" size="sm" onClick={() => void readHistory()} isLoading={loading} />
+      </HStack>
+      {history && <Text type="supporting">{history}</Text>}
       {rows ? (
-        <AnalystList rows={rows} onOpen={onOpen} empty="No moneyline picks found in this channel yet." />
+        <AnalystList rows={rows} onOpen={onOpen} empty="No Gemini-gradable picks found in this channel yet." />
       ) : (
         <Spinner label="Grading picks" />
       )}

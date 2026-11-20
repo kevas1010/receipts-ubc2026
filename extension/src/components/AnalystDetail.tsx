@@ -12,7 +12,7 @@ import {List, ListItem} from '@astryxdesign/core/List';
 import {MetadataList, MetadataListItem} from '@astryxdesign/core/MetadataList';
 import {Spinner} from '@astryxdesign/core/Spinner';
 
-import {api, clvPts, pct, record, shortHash, units, when, type Pick, type Profile} from '../api';
+import {api, betLabel, clvPts, geminiSide, pct, record, shortHash, units, when, type Pick, type Profile} from '../api';
 import {IntegrityBadge, ResultText, Sparkline, TierBadge} from './bits';
 
 function PickRow({pick}: {pick: Pick}) {
@@ -22,13 +22,13 @@ function PickRow({pick}: {pick: Pick}) {
       align="start"
       label={
         <HStack gap={2} vAlign="center" wrap="wrap">
-          <Text weight="semibold">{`${pick.side_label} ML · ${pick.units}u`}</Text>
+          <Text weight="semibold">{`${betLabel(pick)} · ${+pick.units.toFixed(2)}u`}</Text>
           <IntegrityBadge pick={pick} />
         </HStack>
       }
       description={
         <VStack gap={1}>
-          <Text type="supporting" maxLines={1}>{pick.event_title}</Text>
+          <Text type="supporting" maxLines={1}>{`${pick.event_title} · Gemini ${geminiSide(pick)}`}</Text>
           <Text type="supporting">
             {`Posted ${when(pick.posted_at)} · Gemini ${pct(pick.lock_price)} → close ${pct(pick.close_price)} (${clvPts(pick.clv)})`}
           </Text>

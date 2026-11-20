@@ -257,6 +257,9 @@ class SettledPool:
     def games(self):
         return self._g
 
+    def all_markets(self):
+        return self._g
+
 
 def settled_game(start, winner=0):
     e = ev("NBA-X-M", "Arizona", "UConn", start, status="settled",
@@ -392,11 +395,12 @@ def test_slip_image_becomes_graded_pick(conn):
     assert again[0]["outcome"] == "seen" and conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == 1
 
 
-def test_parlay_slip_rejected(conn):
+def test_parlay_slip_legs_are_matched_one_by_one(conn):
+    """A parlay is split into its legs; each needs its own Gemini market (none here)."""
     m = msg(discord_id_for(NOW - timedelta(hours=1)), "lock it in", images=["https://cdn.discordapp.com/a/b/c.png"])
     res = observe.ingest([m], FakeGemini([]), SettledPool([]), conn=conn, now=NOW,
                          read_image=lambda url: "3 Leg Parlay\nArizona\nMoneyline")
-    assert res[0]["outcome"] == "rejected"
+    assert res[0]["outcome"] == "no_game" and "Arizona ML" in res[0]["reason"]
 
 
 @pytest.mark.skipif(not ocr.available(), reason="Tesseract not installed")

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from . import slips, markets as market_match
 from . import analysts, chain, db, observe, odds, service, verify
 from .config import settings
 from .gemini import GeminiClient
@@ -109,9 +110,9 @@ def post_pick(body: PickIn, user: dict = Depends(analyst_user)):
                 "choices": [{"ticker": g.ticker, "title": g.title, "side": s.label,
                              "start_time": g.start_time.isoformat()} for g, s in res.choices[:5]]}
     if not res.ok:
-        return {"ok": False, "message": res.message or "Not a straight moneyline."}
+        return {"ok": False, "message": res.message or "Not a pick Gemini lists (moneyline, spread, total or player prop)."}
     pick = res.pick
-    if res.game and res.side:
+    if res.game and res.side and (pick.get("market_type") or "moneyline") == "moneyline":  # venue compare is moneyline-only
         quotes = odds.compare(res.game, res.side)
         service.save_venues(pick["id"], odds.to_json(quotes))
         pick = dict(db.connect().execute("SELECT * FROM picks WHERE id=?", (pick["id"],)).fetchone())
@@ -152,8 +153,12 @@ def analysts_list(guild_id: str | None = None, channel_id: str | None = None):
 def pick_out(p: dict, events: list[dict]) -> dict:
     keys = ("id", "source", "post_id", "text", "units", "event_ticker", "event_title", "event_slug", "league",
             "side_label", "side_abbr", "instrument_symbol", "start_time", "posted_at", "locked_at", "lock_price",
-            "close_price", "result", "commit_hash", "tx_hash", "status", "mode", "channel_name", "edited_flag", "note")
+            "close_price", "result", "commit_hash", "tx_hash", "status", "mode", "channel_name", "edited_flag", "note",
+            "position", "market_type", "bet_text")
     out = {k: p.get(k) for k in keys}
+    out["position"] = out.get("position") or "yes"
+    out["market_type"] = out.get("market_type") or "moneyline"
+    out["bet_text"] = out.get("bet_text") or (f"{p.get('side_label')} ML" if out["market_type"] == "moneyline" else p.get("team_query"))
     out["profit"] = round(verify.profit(p["result"], p["units"], p["lock_price"]), 2)
     out["clv"] = round(p["close_price"] - p["lock_price"], 4) if p.get("close_price") and p.get("lock_price") else None
     out["tx_url"] = chain.tx_url(p.get("tx_hash"))
@@ -195,7 +200,7 @@ def analyst_profile(handle: str):
 
 @app.get("/api/picks/{pick_id}/candles")
 def candles(pick_id: int):
-    p = db.connect().execute("SELECT instrument_symbol, posted_at, start_time FROM picks WHERE id=?", (pick_id,)).fetchone()
+    p = db.connect().execute("SELECT instrument_symbol, posted_at, start_time, position FROM picks WHERE id=?", (pick_id,)).fetchone()
     if not p:
         raise HTTPException(404)
     try:
@@ -203,6 +208,8 @@ def candles(pick_id: int):
     except Exception as e:
         raise HTTPException(502, f"Gemini candles unavailable: {e}")
     start = datetime.fromisoformat(p["start_time"].replace("Z", "+00:00")).timestamp() * 1000
+    if (p["position"] or "yes") == "no":  # candles are YES prices; a NO position is 1 - YES
+        rows = [{**c, **{k: round(1 - c[k], 4) for k in ("open", "high", "low", "close")}} for c in rows]
     return {"candles": [c for c in rows if c["t"] <= start][-72:], "posted_at": p["posted_at"], "start_time": p["start_time"]}
 
 
@@ -210,11 +217,20 @@ def candles(pick_id: int):
 def preview(text: str):
     """Dry run: parse a post and match it to a live Gemini moneyline. Stores nothing."""
     parsed = parse_pick(text)
-    if parsed is None:
-        return {"ok": False, "message": "Not a pick. Try \"Arizona ML 2u\"."}
-    if isinstance(parsed, Rejection):
-        return {"ok": False, "message": parsed.reason}
-    assert isinstance(parsed, ParsedPick)
+    if not isinstance(parsed, ParsedPick):
+        leg = slips.parse_typed(text)
+        if leg is None:
+            return {"ok": False, "message": parsed.reason if isinstance(parsed, Rejection)
+                    else "Not a pick. Try \"Arizona ML 2u\", \"Pistons -5.5 2u\" or \"Tyrese Maxey over 5.5 assists\"."}
+        m = market_match.match_leg(leg, datetime.now(timezone.utc), gemini.markets())
+        if isinstance(m, market_match.NoMatch):
+            return {"ok": False, "message": f"{leg.describe()}: {m.reason}"}
+        price = market_match.position_price(m.game, m.side, m.position)
+        return {"ok": True, "team": leg.describe(), "units": slips.message_meta(text)[0] or 1.0, "message": "Would lock",
+                "matches": [{"ticker": m.game.ticker, "title": m.game.title, "start_time": m.game.start_time.isoformat(),
+                             "side": f"{m.position.upper()} · {m.side.label}", "price": price, "gemini_url": m.game.market_url,
+                             "venues": [{"venue": "Gemini", "price": price, "url": m.game.market_url, "primary": True,
+                                         "cheapest": True, "note": "grades this pick"}]}]}
     matches = gemini.match(parsed.team)
     if not matches:
         return {"ok": False, "message": f"No upcoming Gemini moneyline for \"{parsed.team}\"."}

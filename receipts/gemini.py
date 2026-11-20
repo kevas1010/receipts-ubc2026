@@ -71,6 +71,10 @@ class Game:
     league: str
     sides: list[Side] = field(default_factory=list)
     raw: dict = field(default_factory=dict, repr=False)
+    market_type: str = "moneyline"   # moneyline | spread | total | prop | ...
+    scope: str = "full_contest"
+    metric: str | None = None
+    participants: list[dict] = field(default_factory=list)
 
     @property
     def market_url(self) -> str:
@@ -108,10 +112,15 @@ def to_game(e: dict) -> Game:
             home_away=c.get("sportsSide") or part.get("side"),
         ))
     league = e.get("ticker", "").split("-")[0]
+    sm = e.get("sportsMarket") or {}
+    mtype = sm.get("type") or ("moneyline" if e.get("ticker", "").endswith("-M") else "")
     return Game(
         ticker=e["ticker"], title=e.get("title", ""), slug=e.get("slug", ""), status=e.get("status", ""),
-        start_time=parse_ts(e.get("startTime")), sport=(e.get("sportsMarket") or {}).get("sport", ""),
-        league=league, sides=sides, raw=e,
+        start_time=parse_ts(e.get("startTime")), sport=sm.get("sport", ""),
+        league=league, sides=sides, raw=e, market_type=mtype,
+        scope=((sm.get("scope") or {}).get("type") or "full_contest"), metric=sm.get("metric"),
+        participants=[{"name": p.get("name", ""), "abbreviation": p.get("abbreviation", ""), "side": p.get("side")}
+                      for p in e.get("participants") or []],
     )
 
 
@@ -170,6 +179,18 @@ class GeminiClient:
         games = [to_game(e) for e in self._events("active") if is_moneyline(e)]
         self._cache = (time.time(), games)
         return games
+
+    def markets(self, refresh: bool = False) -> list[Game]:
+        """Every active sports market: moneylines, spreads, totals and player props."""
+        hit = getattr(self, "_mcache", None)
+        if not refresh and hit and time.time() - hit[0] < self.cache_seconds:
+            return hit[1]
+        games = [to_game(e) for e in self._events("active")]
+        self._mcache = (time.time(), games)
+        return games
+
+    def settled_markets(self, max_pages: int = 20) -> list[Game]:
+        return [to_game(e) for e in self._events("settled", max_pages=max_pages)]
 
     def settled_moneylines(self, max_pages: int = 20) -> list[Game]:
         return [to_game(e) for e in self._events("settled", max_pages=max_pages) if is_moneyline(e)]
