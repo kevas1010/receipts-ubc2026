@@ -42,24 +42,35 @@ export default function App() {
       content={
         <LayoutContent padding={0}>
           <VStack padding={4} gap={4}>
-            <HStack gap={2} vAlign="center">
-              <StackItem size="fill">
-                <VStack gap={0.5}>
-                  <Heading level={2}>PickProof</Heading>
-                  <Text type="supporting">
-                    {signedIn ? `${session.name} · ${session.role === 'tailer' ? 'Tailer' : 'Analyst'}` : 'Graded on Gemini Predictions'}
+            <VStack gap={2}>
+              <HStack gap={2} vAlign="center">
+                <StackItem size="fill">
+                  <Text type="label" color="secondary">
+                    Vol. 1 · {new Date().toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'})}
                   </Text>
-                </VStack>
-              </StackItem>
-              {signedIn && (
-                <Button
-                  label="Sign out"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void saveSession({token: null, role: null, name: null}).then(setSession)}
-                />
-              )}
-            </HStack>
+                </StackItem>
+                <Text type="label" color="secondary">Late city final</Text>
+              </HStack>
+              <Divider />
+              <HStack gap={2} vAlign="center">
+                <StackItem size="fill">
+                  <Heading level={1} type="display-2">PickProof.</Heading>
+                </StackItem>
+                {signedIn && (
+                  <Button
+                    label="Sign out"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void saveSession({token: null, role: null, name: null}).then(setSession)}
+                  />
+                )}
+              </HStack>
+              <Divider />
+              <Text type="label">
+                {signedIn ? `${session.name} · ${session.role === 'tailer' ? 'Tailer edition' : 'Analyst desk'}` : 'The record of every pick · Graded on Gemini Predictions'}
+              </Text>
+              <Divider />
+            </VStack>
 
             {demo && (
               <Banner

@@ -1,0 +1,233 @@
+{
+  "name": "newsprint",
+  "like": "neutral",
+  "mode": "light-only",
+  "settings": [
+    {
+      "thing": "corners",
+      "value": "square",
+      "source": "dial"
+    },
+    {
+      "thing": "headings",
+      "value": "heavy",
+      "source": "dial",
+      "axis": "weight"
+    },
+    {
+      "thing": "headings",
+      "value": "tighter",
+      "source": "dial",
+      "axis": "tracking"
+    },
+    {
+      "thing": "accent",
+      "value": "#111111",
+      "source": "dial"
+    },
+    {
+      "thing": "danger",
+      "value": "#CC0000",
+      "source": "dial"
+    },
+    {
+      "thing": "neutral",
+      "value": "#8a8578",
+      "source": "dial"
+    },
+    {
+      "thing": "font",
+      "value": "source-serif",
+      "source": "dial"
+    },
+    {
+      "thing": "font",
+      "value": "'Playfair Display', Georgia, serif",
+      "source": "dial",
+      "on": "heading"
+    },
+    {
+      "thing": "font",
+      "value": "ibm-plex-mono",
+      "source": "dial",
+      "on": "code"
+    },
+    {
+      "thing": "--color-background-body",
+      "value": "#F9F9F7",
+      "source": "token"
+    },
+    {
+      "thing": "--color-background-card",
+      "value": "#F9F9F7",
+      "source": "token"
+    },
+    {
+      "thing": "--color-background-surface",
+      "value": "#FFFFFF",
+      "source": "token"
+    },
+    {
+      "thing": "--color-background-popover",
+      "value": "#FFFFFF",
+      "source": "token",
+      "note": "no part of this Core reads --color-background-popover, and no token it feeds is read, so it changes nothing you see now; it is set as asked because a dial writes it too"
+    },
+    {
+      "thing": "--color-background-muted",
+      "value": "#EFEDE6",
+      "source": "token"
+    },
+    {
+      "thing": "--color-border",
+      "value": "#111111",
+      "source": "token"
+    },
+    {
+      "thing": "--color-border-emphasized",
+      "value": "#111111",
+      "source": "token"
+    },
+    {
+      "thing": "--color-text-primary",
+      "value": "#111111",
+      "source": "token"
+    },
+    {
+      "thing": "--color-text-secondary",
+      "value": "#4A4A4A",
+      "source": "token"
+    },
+    {
+      "thing": "text-transform",
+      "value": "uppercase",
+      "source": "property",
+      "on": "text",
+      "when": "type:label"
+    },
+    {
+      "thing": "letter-spacing",
+      "value": "0.12em",
+      "source": "property",
+      "on": "text",
+      "when": "type:label"
+    },
+    {
+      "thing": "text-transform",
+      "value": "uppercase",
+      "source": "property",
+      "on": "button"
+    },
+    {
+      "thing": "letter-spacing",
+      "value": "0.1em",
+      "source": "property",
+      "on": "button"
+    },
+    {
+      "thing": "text-transform",
+      "value": "uppercase",
+      "source": "property",
+      "on": "badge"
+    },
+    {
+      "thing": "letter-spacing",
+      "value": "0.08em",
+      "source": "property",
+      "on": "badge"
+    },
+    {
+      "thing": "font-family",
+      "value": "'IBM Plex Mono', monospace",
+      "source": "property",
+      "on": "text",
+      "when": "type:label"
+    },
+    {
+      "thing": "font-family",
+      "value": "'IBM Plex Mono', monospace",
+      "source": "property",
+      "on": "button"
+    },
+    {
+      "thing": "font-family",
+      "value": "'IBM Plex Mono', monospace",
+      "source": "property",
+      "on": "badge"
+    },
+    {
+      "thing": "font-size",
+      "value": "0.75rem",
+      "source": "property",
+      "on": "text",
+      "when": "type:label"
+    },
+    {
+      "thing": "background-color",
+      "value": "var(--color-background-body)",
+      "source": "property",
+      "on": "layout"
+    },
+    {
+      "thing": "font-weight",
+      "value": "900",
+      "source": "property",
+      "on": "heading",
+      "when": "type:display-2"
+    },
+    {
+      "thing": "font-size",
+      "value": "3rem",
+      "source": "property",
+      "on": "heading",
+      "when": "type:display-2"
+    },
+    {
+      "thing": "line-height",
+      "value": "1",
+      "source": "property",
+      "on": "heading",
+      "when": "type:display-2"
+    },
+    {
+      "thing": "info",
+      "value": "#2b2b2b",
+      "source": "dial"
+    },
+    {
+      "thing": "background-color",
+      "value": "transparent",
+      "source": "property",
+      "on": "button",
+      "when": "variant:secondary"
+    },
+    {
+      "thing": "border",
+      "value": "1px solid var(--color-border-emphasized)",
+      "source": "property",
+      "on": "button",
+      "when": "variant:secondary"
+    },
+    {
+      "thing": "border",
+      "value": "1px solid var(--color-border-emphasized)",
+      "source": "property",
+      "on": "banner"
+    },
+    {
+      "thing": "background-color",
+      "value": "var(--color-background-muted)",
+      "source": "property",
+      "on": "banner",
+      "when": "status:info"
+    },
+    {
+      "thing": "corners",
+      "value": "square",
+      "source": "dial",
+      "on": "badge"
+    }
+  ],
+  "lifted": [],
+  "palette": "bc9000de28aab18df2fddb6c6a297b1a6957e3b25f1d8570a7e5a76fd074bd0d"
+}

@@ -58,13 +58,17 @@ def anchor(hash_hex: str, pick_ref: str) -> str | None:
     try:
         from eth_account import Account
 
+        from eth_utils import to_checksum_address
+
         acct = Account.from_key(settings.arc_private_key)
+        # eth-account refuses a lowercase "to", which is how explorers and RPCs often print addresses.
+        contract = to_checksum_address(settings.arc_contract)
         data = "0x" + _encode_commit(hash_hex, pick_ref).hex()
         nonce = int(_rpc("eth_getTransactionCount", [acct.address, "pending"]), 16)
         gas_price = int(_rpc("eth_gasPrice", []), 16)
-        call = {"from": acct.address, "to": settings.arc_contract, "data": data}
+        call = {"from": acct.address, "to": contract, "data": data}
         gas = int(int(_rpc("eth_estimateGas", [call]), 16) * 1.3)
-        tx = {"to": settings.arc_contract, "data": data, "nonce": nonce, "gas": gas,
+        tx = {"to": contract, "data": data, "nonce": nonce, "gas": gas,
               "gasPrice": gas_price, "chainId": settings.arc_chain_id, "value": 0}
         signed = acct.sign_transaction(tx)
         raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
@@ -78,10 +82,13 @@ def tx_url(tx_hash: str | None) -> str | None:
     return f"{settings.arc_explorer}/tx/{tx_hash}" if tx_hash else None
 
 
-def recent_commits(from_block: str = "earliest") -> list[dict]:
-    """Free alternative to a paid stream: read PickCommitted logs straight from the public RPC."""
+def recent_commits(from_block: str | None = None) -> list[dict]:
+    """Free alternative to a paid stream: read PickCommitted logs straight from the public RPC.
+    Arc's RPC caps eth_getLogs at 10,000 blocks, so by default this reads the latest 9,000."""
     if not settings.arc_contract:
         return []
+    if from_block is None:
+        from_block = hex(max(0, int(_rpc("eth_blockNumber", []), 16) - 9000))
     logs = _rpc("eth_getLogs", [{"address": settings.arc_contract, "fromBlock": from_block,
                                  "toBlock": "latest", "topics": [PICK_COMMITTED_TOPIC]}])
     return [{"hash": l["topics"][1], "tx": l["transactionHash"], "block": int(l["blockNumber"], 16)} for l in logs]
