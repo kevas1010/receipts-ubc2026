@@ -27,6 +27,7 @@
     const AUTHORS = {
       carl: {id: '300000000000000001', name: 'Capper Carl'},
       frank: {id: '300000000000000002', name: 'Fade Frank'},
+      steve: {id: '300000000000000003', name: 'Slip Steve'},
     };
     const POSTS = [
       ['carl', '2026-11-19T19:02:00Z', 'Tonight\'s card 🔒'],
@@ -39,6 +40,9 @@
       ['frank', '2026-11-19T20:11:00Z', 'Minnesota ML 3u'],
       ['frank', '2026-11-19T20:12:00Z', 'Vegas ML 2u'],
       ['frank', '2026-11-19T20:13:00Z', 'Seattle ML 1u'],
+      // Bet slip screenshots (read with Tesseract OCR on the server)
+      ['steve', '2026-11-19T20:15:00Z', 'tailing myself 🔒', false, ['light_ml.png']],
+      ['carl', '2026-11-19T21:00:00Z', '', false, ['parlay.png']],
     ];
     // ?post=TEXT&as=frank appends a message posted now (e.g. an analyst's RCPT- claim code).
     const q = new URLSearchParams(location.search);
@@ -48,7 +52,7 @@
     const snowflake = iso => ((BigInt(Date.parse(iso)) - 1420070400000n) << 22n).toString();
     const list = document.getElementById('list');
     let prev = null;
-    for (const [who, at, text, edited] of POSTS) {
+    for (const [who, at, text, edited, images] of POSTS) {
       const a = AUTHORS[who];
       const mid = snowflake(at);
       const li = document.createElement('li');
@@ -64,6 +68,11 @@
       content.textContent = text.replace(' (edited)', '');
       if (edited) {
         content.insertAdjacentHTML('beforeend', ' <span class="edited_abc"><time>(edited)</time></span>');
+      }
+      if (images) {
+        const urls = images.map(f => `${location.origin}/dev/attachments/${f}`);
+        li.insertAdjacentHTML('beforeend', `<div id="message-accessories-${mid}">` +
+          urls.map(u => `<a href="${u}"><img src="${u}" style="max-width:280px;border-radius:8px;margin-top:6px" alt=""></a>`).join('') + '</div>');
       }
       list.appendChild(li);
       prev = who;

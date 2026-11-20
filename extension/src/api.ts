@@ -233,12 +233,25 @@ export function onFocusAnalyst(cb: (handle: string) => void): () => void {
 interface ExportFile {
   guild?: {id?: string};
   channel?: {id?: string; name?: string};
-  messages?: {id: string; content?: string; timestampEdited?: string | null; author?: {id?: string; name?: string; nickname?: string; avatarUrl?: string}}[];
+  messages?: {
+    id: string;
+    content?: string;
+    timestampEdited?: string | null;
+    author?: {id?: string; name?: string; nickname?: string; avatarUrl?: string};
+    attachments?: {url?: string; fileName?: string}[];
+  }[];
 }
 
 export function messagesFromExport(json: ExportFile) {
   return (json.messages ?? [])
-    .filter(m => m.id && m.content)
+    .map(m => ({
+      ...m,
+      images: (m.attachments ?? [])
+        .map(a => a.url ?? '')
+        .filter(u => /\.(png|jpe?g|webp)(\?|$)/i.test(u) && /^https:\/\//.test(u))
+        .slice(0, 4),
+    }))
+    .filter(m => m.id && (m.content || m.images.length))
     .map(m => ({
       message_id: m.id,
       channel_id: json.channel?.id ?? null,
@@ -247,8 +260,9 @@ export function messagesFromExport(json: ExportFile) {
       author_id: m.author?.id ?? null,
       author_name: m.author?.nickname || m.author?.name || 'unknown',
       avatar_url: m.author?.avatarUrl ?? null,
-      text: m.content,
+      text: m.content ?? '',
       edited: !!m.timestampEdited,
+      images: m.images,
     }));
 }
 

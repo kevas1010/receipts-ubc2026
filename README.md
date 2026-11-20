@@ -31,6 +31,18 @@ first Receipts extension that sees that message (theirs or any tailer's) reports
 becomes the verified account. Only the person logged into that Discord account can post as it, so that's the
 ownership proof.
 
+### Bet slip screenshots (Tesseract OCR)
+
+Many analysts post a screenshot of the sportsbook slip instead of typing the pick. When a message has no
+typed pick but has image attachments, the server downloads the image (only from Discord's own image hosts,
+size-capped), cleans it up (grayscale, upscale, dark-mode inversion) and reads it with **Tesseract**. A straight
+moneyline slip ("Detroit Pistons / Moneyline / -280") becomes a pick like "Detroit Pistons ML". Parlays,
+spreads, totals and props are rejected, exactly as for typed picks. The post time is still the message's,
+and the pick is labelled "Read from a bet slip image with OCR". OCR results are cached per attachment.
+
+Install Tesseract locally (Windows: the UB Mannheim build; macOS: `brew install tesseract`; Linux:
+`apt install tesseract-ocr`). The Dockerfile used for deployment installs it automatically.
+
 ### What the extension reads, and what it doesn't
 
 * Only messages Discord has already rendered on your screen, in channels you can already open.
@@ -61,13 +73,14 @@ verified analysts' new picks, compared on ask price; the star goes to whichever 
 | `extension/` | The Chrome extension (Manifest V3). Side panel UI in React with [Astryx](https://astryx.atmeta.com/); `public/content.js` reads Discord and paints badges; `public/background.js` talks to the API |
 | `extension/dev/discord-fixture.html` | A Discord-shaped test page with real settled games, for testing the content script without Discord |
 | `receipts/observe.py` | Grades observed Discord messages: scrape unverified authors, track verified ones, catch claim codes and edits |
+| `receipts/ocr.py` | Tesseract OCR for bet-slip images and the slip-text parser |
 | `receipts/analysts.py` | Tailer and analyst sign-in, the claim code flow, storefront links |
 | `receipts/verify.py` | Verified / Unverified records and the Verified Sharp rules |
 | `receipts/web.py` | The API the extension uses, plus the shareable SVG badge |
 | `receipts/gemini.py`, `parse.py`, `service.py`, `odds.py`, `chain.py`, `contracts/PickRegistry.sol` | Gemini client, moneyline parser, locking and grading, venue comparison, Arc commits |
 | `receipts/bot.py` | Optional Discord bot (auto-lock in `#moneyline` channels, `/record`, `/leaderboard`, `/import_x`) |
 | `receipts/seed_demo.py` | Demo analysts from real settled Gemini games |
-| `tests/` | 45 offline tests |
+| `tests/` | 50 offline tests (the Tesseract one is skipped if Tesseract isn't installed); `tests/slips.py` renders sample slips |
 
 ## Run it
 
@@ -85,11 +98,14 @@ Click the Receipts icon to open the side panel, sign in as a Tailer or an Analys
 on discord.com. If Discord was already open, reload that tab once.
 
 The side panel's "Receipts server" field points the extension at a hosted API instead of localhost. Hosts on
-`*.onrender.com` are already allowed in the manifest. `render.yaml` deploys the API to Render's free tier.
+`*.onrender.com` are already allowed in the manifest. `render.yaml` deploys the API (Docker, with Tesseract)
+to Render's free tier.
 
 Testing without Discord: run `npx vite` in `extension/` and open
 `http://localhost:5173/sidepanel.html` (the side panel) and `http://localhost:5173/dev/discord-fixture.html`
-(a Discord-shaped page that runs the real content script). Add `?post=RCPT-XXXXXX&as=frank` to post a claim code.
+(a Discord-shaped page that runs the real content script, including bet slip screenshots). Add
+`?post=RCPT-XXXXXX&as=frank` to post a claim code. Set `OCR_ALLOW_LOCAL=1` in `.env` so the server may read the
+test page's slip images from localhost.
 
 ## Demo analysts
 

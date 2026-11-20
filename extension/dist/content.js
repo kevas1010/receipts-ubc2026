@@ -41,6 +41,20 @@
     return {text: (clone.innerText || clone.textContent || '').trim(), edited};
   }
 
+  /** Attached images (bet slip screenshots). Prefer the original CDN link over the resized preview. */
+  function messageImages(li) {
+    const urls = new Set();
+    li.querySelectorAll('a[href*="/attachments/"]').forEach(a => {
+      if (/\.(png|jpe?g|webp)(\?|$)/i.test(a.getAttribute('href') || '')) {
+        urls.add(a.href);
+      }
+    });
+    if (!urls.size) {
+      li.querySelectorAll('img[src*="/attachments/"]').forEach(img => urls.add(img.src));
+    }
+    return [...urls].slice(0, 4);
+  }
+
   /** Discord message rows: <li id="chat-messages-{channelId}-{messageId}">. Continuation rows have no
    * header, so the author carries over from the row above. */
   function readMessages() {
@@ -68,7 +82,8 @@
         return;
       }
       const {text, edited} = messageText(li);
-      if (!text) {
+      const images = messageImages(li);
+      if (!text && !images.length) {
         return;
       }
       out.push({
@@ -81,6 +96,7 @@
         avatar_url: lastAuthor.avatar,
         text,
         edited,
+        images,
         _nameEl: nameEl || null,
       });
     });
@@ -100,13 +116,14 @@
 
   async function scan(force) {
     const msgs = readMessages();
-    const fresh = msgs.filter(m => force || SENT.get(m.message_id) !== m.text);
+    const key = m => m.text + '|' + m.images.length;
+    const fresh = msgs.filter(m => force || SENT.get(m.message_id) !== key(m));
     let result = null;
     if (fresh.length) {
       const batch = fresh.slice(0, 200).map(({_nameEl, ...m}) => m);
       result = await send('OBSERVE', {messages: batch});
       if (result && !result.error && !result.skipped) {
-        batch.forEach(m => SENT.set(m.message_id, m.text));
+        batch.forEach(m => SENT.set(m.message_id, key(m)));
       }
     }
     await paintBadges(msgs);

@@ -355,3 +355,57 @@ def test_same_team_future_games_pick_soonest():
     games[1].sides[1].full_name = games[0].sides[0].full_name  # same Arizona team
     m = match_team("Arizona", games, NOW)
     assert len(m) == 1 and m[0][0].ticker == "NBA-2-M"
+
+
+# ---- bet slip OCR ---------------------------------------------------------
+from receipts import ocr  # noqa: E402
+
+
+def test_read_slip_text_layouts():
+    assert ocr.read_slip("STRAIGHT\nDetroit Pistons\nMoneyline\n-280\nWager $50.00").picks == ["Detroit Pistons ML"]
+    assert ocr.read_slip("Calgary Flames +135 Moneyline\nStake $20").picks == ["Calgary Flames ML"]
+    assert ocr.read_slip("2 Leg Parlay\nArizona\nMoneyline\nUConn\nMoneyline").rejected
+    assert ocr.read_slip("Lakers -4.5\nSpread\n-110").rejected
+    assert ocr.read_slip("lol nice hit").picks == []
+
+
+def test_only_discord_image_hosts_are_fetched():
+    assert ocr.allowed_url("https://cdn.discordapp.com/attachments/1/2/slip.png?ex=abc")
+    assert ocr.allowed_url("https://media.discordapp.net/attachments/1/2/slip.png")
+    assert not ocr.allowed_url("http://cdn.discordapp.com/x.png")
+    assert not ocr.allowed_url("https://169.254.169.254/latest")
+    assert not ocr.allowed_url("https://evil.example/cdn.discordapp.com/x.png")
+
+
+def test_slip_image_becomes_graded_pick(conn):
+    posted = NOW - timedelta(days=2)
+    game = settled_game(posted + timedelta(hours=3), winner=0)
+    m = msg(discord_id_for(posted), "", images=["https://cdn.discordapp.com/attachments/1/2/slip.png"])
+    res = observe.ingest([m], FakeGemini([]), SettledPool([game]), conn=conn, now=NOW,
+                         read_image=lambda url: "STRAIGHT\nArizona Wildcats\nMoneyline\n+120\nWager $20")
+    assert res[0]["outcome"] == "scraped" and res[0]["from_slip"]
+    p = conn.execute("SELECT post_id, text, note, posted_at FROM picks").fetchone()
+    assert p["post_id"].endswith(":slip1") and p["text"] == "Arizona Wildcats ML"
+    assert "OCR" in p["note"] and p["posted_at"] == service.iso(posted)
+    # seen again: no duplicate
+    again = observe.ingest([m], FakeGemini([]), SettledPool([game]), conn=conn, now=NOW, read_image=lambda url: "x")
+    assert again[0]["outcome"] == "seen" and conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == 1
+
+
+def test_parlay_slip_rejected(conn):
+    m = msg(discord_id_for(NOW - timedelta(hours=1)), "lock it in", images=["https://cdn.discordapp.com/a/b/c.png"])
+    res = observe.ingest([m], FakeGemini([]), SettledPool([]), conn=conn, now=NOW,
+                         read_image=lambda url: "3 Leg Parlay\nArizona\nMoneyline")
+    assert res[0]["outcome"] == "rejected"
+
+
+@pytest.mark.skipif(not ocr.available(), reason="Tesseract not installed")
+def test_tesseract_reads_rendered_slips():
+    import sys
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+    from slips import render
+
+    assert ocr.read_slip(ocr.image_text(render("straight_ml"))).picks == ["Detroit Pistons ML"]
+    assert ocr.read_slip(ocr.image_text(render("light_ml"))).picks == ["Calgary Flames ML"]
+    assert ocr.read_slip(ocr.image_text(render("parlay"))).rejected
+    assert ocr.read_slip(ocr.image_text(render("spread"))).rejected

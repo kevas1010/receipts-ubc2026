@@ -1,15 +1,12 @@
-# Free Render web service for the Receipts API (the Chrome extension talks to it). Disk is ephemeral on the free tier,
-# so the demo seed reruns on every boot from live Gemini data.
+# Free Render web service for the Receipts API (the Chrome extension talks to it).
+# Docker, so Tesseract OCR is installed for bet-slip screenshots. Disk is ephemeral on the free tier.
 services:
   - type: web
-    name: receipts
-    runtime: python
+    name: receipts-api
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m receipts.seed_demo; uvicorn receipts.web:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: ./Dockerfile
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.7
       - key: DEMO_MODE
         value: "true"
       - key: VERIFY_WINDOW_DAYS
@@ -20,5 +17,3 @@ services:
         value: "3"
       - key: SHOW_OTHER_VENUES
         value: "true"
-      - key: RECEIPTS_DB
-        value: /tmp/receipts.db
