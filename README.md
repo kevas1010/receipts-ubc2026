@@ -146,7 +146,7 @@ test page's slip images from localhost.
 3. **Stage one analyst for the live demo.** A staged analyst is fully imported and graded but hidden. When you
    open their channel and press **Load 30 days**, the scan reveals the already-checked record in seconds:
    ```bash
-   python -m receipts.import_export --stage Jesse
+   python -m receipts.import_export --stage Bronco
    python -m receipts.import_export --list          # check what's loaded and staged
    ```
 4. **Snapshot it.** Stop the server and copy `receipts.db` to `demo.db`; set `RECEIPTS_DB` to a copy of `demo.db`

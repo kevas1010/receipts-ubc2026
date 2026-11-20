@@ -1,8 +1,8 @@
 """Import Discord channel exports (DiscordChatExporter JSON) into PickProof, and stage analysts for the demo.
 
     python -m receipts.import_export exports/*.json               # read, OCR, match to Gemini, grade
-    python -m receipts.import_export exports/*.json --stage Jesse  # same, then hide Jesse until someone presses Load
-    python -m receipts.import_export --stage Jesse                 # hide an already imported analyst again
+    python -m receipts.import_export exports/*.json --stage Bronco  # same, then hide Jesse until someone presses Load
+    python -m receipts.import_export --stage Bronco                 # hide an already imported analyst again
     python -m receipts.import_export --list                        # what's in the database
 
 Post times come from the message IDs, exactly as for messages read in the browser. Discord image links in an
