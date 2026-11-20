@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.env
+receipts.db*
+web/node_modules/
+web/src/tpl/
+.pytest_cache/

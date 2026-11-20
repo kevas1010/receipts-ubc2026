@@ -1,0 +1,25 @@
+# Free Render web service (render.com, "free" instance type). Disk is ephemeral on the free tier,
+# so the demo seed reruns on every boot from live Gemini data.
+services:
+  - type: web
+    name: receipts
+    runtime: python
+    plan: free
+    # web/dist is committed, so the build needs no Node toolchain.
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m receipts.seed_demo; uvicorn receipts.web:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DEMO_MODE
+        value: "true"
+      - key: VERIFY_WINDOW_DAYS
+        value: "4"
+      - key: VERIFY_MIN_PICKS
+        value: "8"
+      - key: VERIFY_MIN_DAYS
+        value: "3"
+      - key: SHOW_OTHER_VENUES
+        value: "true"
+      - key: RECEIPTS_DB
+        value: /tmp/receipts.db
